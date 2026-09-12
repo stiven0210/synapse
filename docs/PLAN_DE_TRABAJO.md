@@ -431,6 +431,45 @@ el job de ejemplo la alimenta con los 2 escenarios conocidos. El Nivel 3
 (¿esto reduce de verdad el esfuerzo de un humano?) sigue sin poder
 validarse sin incidentes reales en producción.
 
+### ✅ Monitoreo de deriva del score de salida — completo
+
+`evaluar_deriva()` solo miraba deriva por feature de entrada — un shift
+pequeño repartido en muchas features (cada una por debajo de PSI 0.25)
+puede mover el score combinado del modelo sin que ninguna lo muestre sola,
+justo lo que el monitoreo por feature, por diseño, no puede ver.
+
+`src/artefacto.py::calcular_scores()` — versión batch vectorizada de la
+misma fórmula que `Ejecutor.decidir()` aplica incrementalmente (verificado
+idéntico hasta 1e-9 en `tests/test_artefacto.py`, mismo principio de
+train/serve parity que el resto del proyecto). Solo para diagnóstico
+offline, nunca en el camino caliente.
+
+`src/deriva.py::evaluar_deriva_score()` — PSI+KS sobre el score en vez de
+una feature. `disparador_recalibracion.py` ahora combina ambas señales:
+recomienda recalibrar si CUALQUIERA es significativa (feature o score),
+usando el artefacto vigente para calcular los scores.
+
+**Caso construido a mano que demuestra el valor real** (`tests/test_deriva.py`):
+un shift de 0.11 desviaciones estándar repartido en 30 features dejó a
+CADA UNA muy por debajo de PSI 0.25, pero el score combinado (media de las
+30) cruzó a PSI=0.35. Reproducido también a través del disparador completo
+(`tests/test_disparador_recalibracion.py`): 0 features cruzan solas, el
+score sí, y el disparador recalibra igual.
+
+**Resultado real, dirección contraria — igual de valioso**: sobre el
+dataset real, 8/31 features muestran deriva significativa mientras el PSI
+del score combinado da solo 0.07 (sin deriva significativa) — confirma que
+las dos señales son genuinamente complementarias, no redundantes; pueden
+discrepar en cualquier dirección.
+
+También se eliminó una duplicación real: `scripts/comparacion_umbral_por_costo.py`
+tenía su propia función de scoring copiada — ahora usa
+`artefacto.calcular_scores()`, una sola fuente de verdad para "cómo se
+aplica un artefacto a un DataFrame completo".
+
+8 tests nuevos (4 en `test_artefacto.py`, 3 en `test_deriva.py`, 1 de
+integración en `test_disparador_recalibracion.py`). Suite completa: 118 tests.
+
 ### ✅ Deriva ponderada por magnitud de coeficiente — completo
 
 `evaluar_deriva()` trataba todas las features igual: cualquiera que

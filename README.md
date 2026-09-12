@@ -39,9 +39,10 @@ recalibración -> publicación -> recarga en vivo) + bitácora de decisiones +
 agente de triage de escalamientos de Veto (LLM en capa lenta, con
 grounding y auditor selectivo, nunca en el camino caliente) + validación
 cruzada walk-forward multi-fold + umbral de decisión por costo esperado
-(análisis, no reemplaza producción). Agente de triage validado con
+(análisis, no reemplaza producción) + monitoreo de deriva del score de
+salida (complementa la deriva por feature). Agente de triage validado con
 `ANTHROPIC_API_KEY` real (2 bugs de integración encontrados y corregidos).
-**110 tests, todos en verde.**
+**118 tests, todos en verde.**
 
 ## Las piezas
 
@@ -114,7 +115,7 @@ synapse/
 │   ├── recalibracion_automatica.py   # disparador de recalibración, end-to-end
 │   └── triage_veto.py                # bitácora -> agente de triage -> reporte para un humano
 ├── src/
-│   ├── artefacto.py       # contrato compartido (validación ADR_001)
+│   ├── artefacto.py       # contrato compartido (validación ADR_001) + calcular_scores() batch
 │   ├── calibrador.py
 │   ├── ejecutor.py
 │   ├── features_recursivas.py

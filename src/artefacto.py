@@ -4,6 +4,7 @@ un hallazgo de la auditoría: `puente.py` importaba la validación desde
 `ejecutor.py`, invirtiendo la dirección natural de dependencia (el
 contrato es compartido, no debería depender del consumidor rápido).
 """
+import numpy as np
 
 CAMPOS_REQUERIDOS_ADR_001 = {
     "version", "fecha_calibracion", "modelo", "features",
@@ -50,3 +51,29 @@ def validar_artefacto(artefacto: dict) -> None:
     umbral = artefacto["umbral_decision"]
     if not _es_numero(umbral) or not (0.0 <= umbral <= 1.0):
         raise ArtefactoInvalido(f"umbral_decision fuera de [0,1] o no numérico: {umbral!r}")
+
+
+def _sigmoide_vectorizada(z: np.ndarray) -> np.ndarray:
+    """Misma forma numéricamente estable que `Ejecutor._sigmoide`
+    (evita overflow de `exp` para z muy negativo), vectorizada."""
+    resultado = np.empty_like(z, dtype=float)
+    positivos = z >= 0
+    resultado[positivos] = 1.0 / (1.0 + np.exp(-z[positivos]))
+    ez = np.exp(z[~positivos])
+    resultado[~positivos] = ez / (1.0 + ez)
+    return resultado
+
+
+def calcular_scores(artefacto: dict, df) -> np.ndarray:
+    """Aplica el artefacto a un DataFrame completo, vectorizado -- versión
+    batch de la misma fórmula que `Ejecutor.decidir()` aplica
+    incrementalmente fila por fila (verificado idéntico en
+    `tests/test_artefacto.py`). Solo para diagnóstico/análisis offline
+    (ej. `deriva.evaluar_deriva_score`, `scripts/comparacion_umbral_por_costo.py`)
+    -- el camino caliente real sigue siendo exclusivamente
+    `Ejecutor`/`CicloDecision`, esto nunca se usa ahí. Requiere que `df` ya
+    tenga las features del artefacto calculadas (incluidas las recursivas,
+    vía `features_recursivas.calcular_features_recursivas_batch`)."""
+    X = df[artefacto["features"]].to_numpy(dtype=float)
+    z = artefacto["intercepto"] + X @ np.asarray(artefacto["coeficientes"], dtype=float)
+    return _sigmoide_vectorizada(z)

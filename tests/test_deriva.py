@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.deriva import calcular_psi, evaluar_deriva, evaluar_ks, interpretar_psi, ponderar_deriva_por_coeficiente
+from src.deriva import calcular_psi, evaluar_deriva, evaluar_deriva_score, evaluar_ks, interpretar_psi, ponderar_deriva_por_coeficiente
 
 
 def test_psi_misma_distribucion_es_cercano_a_cero():
@@ -79,6 +79,50 @@ def test_evaluar_deriva_sin_ninguna_columna_con_deriva_no_recomienda_recalibrar(
     reporte = evaluar_deriva(df_ref, df_actual, columnas=["a"])
 
     assert reporte["recomendacion_recalibrar"] is False
+
+
+def test_evaluar_deriva_score_misma_distribucion_no_recomienda_recalibrar():
+    rng = np.random.default_rng(0)
+    scores_ref = rng.uniform(0, 1, 3000)
+    scores_actual = rng.uniform(0, 1, 3000)
+
+    reporte = evaluar_deriva_score(scores_ref, scores_actual)
+
+    assert reporte["psi_interpretacion"] == "sin_deriva_significativa"
+
+
+def test_evaluar_deriva_score_con_deriva_fuerte_la_detecta():
+    rng = np.random.default_rng(0)
+    scores_ref = rng.uniform(0, 0.3, 3000)
+    scores_actual = rng.uniform(0.6, 1.0, 3000)  # el modelo empezó a marcar todo como sospechoso
+
+    reporte = evaluar_deriva_score(scores_ref, scores_actual)
+
+    assert reporte["psi_interpretacion"] == "deriva_significativa_recalibrar"
+    assert reporte["ks"]["hay_deriva"] is True
+
+
+def test_evaluar_deriva_score_detecta_deriva_que_ninguna_feature_individual_muestra_sola():
+    # El caso que justifica monitorear el score además de cada feature: un
+    # shift pequeño (0.11 desviaciones estándar) repartido en 30 features
+    # deja a CADA feature muy por debajo del umbral de PSI -- pero el score
+    # combinado (que agrega el efecto neto de las 30) sí cruza el umbral.
+    # Parámetros verificados a mano antes de escribir el test, no ajustados
+    # después para que "diera bien".
+    rng = np.random.default_rng(11)
+    n, k, delta = 5000, 30, 0.11
+    ref = rng.normal(0, 1, (n, k))
+    actual = rng.normal(delta, 1, (n, k))
+
+    for i in range(k):
+        psi_feature = calcular_psi(ref[:, i], actual[:, i])
+        assert interpretar_psi(psi_feature) != "deriva_significativa_recalibrar"
+
+    score_ref = ref.mean(axis=1)
+    score_actual = actual.mean(axis=1)
+    reporte_score = evaluar_deriva_score(score_ref, score_actual)
+
+    assert reporte_score["psi_interpretacion"] == "deriva_significativa_recalibrar"
 
 
 def test_ponderar_deriva_por_coeficiente_calcula_contribucion_ponderada():

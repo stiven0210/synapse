@@ -11,9 +11,9 @@ esto.
 import json
 from pathlib import Path
 
-import numpy as np
 from sklearn.metrics import f1_score, precision_score, recall_score
 
+from src.artefacto import calcular_scores
 from src.calibrador import calibrar, cargar_dataset, split_temporal
 from src.costo_decision import costo_esperado, mejor_umbral_por_costo
 
@@ -21,12 +21,6 @@ RAIZ = Path(__file__).resolve().parent.parent
 RUTA_DATASET = RAIZ / "data" / "raw" / "creditcard.csv"
 
 COSTO_FALSO_POSITIVO_PLACEHOLDER = 5.0  # SUPUESTO ilustrativo -- reemplazar con un dato de negocio real
-
-
-def _scores(artefacto: dict, df) -> np.ndarray:
-    X = df[artefacto["features"]].to_numpy()
-    z = artefacto["intercepto"] + X @ np.array(artefacto["coeficientes"])
-    return 1.0 / (1.0 + np.exp(-z))
 
 
 def _metricas(y_true, y_pred) -> dict:
@@ -42,7 +36,7 @@ def main() -> None:
     train, val, test = split_temporal(df)
     artefacto = calibrar(train, val)
 
-    scores_test = _scores(artefacto, test)
+    scores_test = calcular_scores(artefacto, test)
     y_true = test["Class"].to_numpy()
     montos = test["Amount"].to_numpy()
 

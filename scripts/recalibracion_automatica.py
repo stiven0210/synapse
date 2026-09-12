@@ -43,6 +43,8 @@ def main() -> None:
     if resultado.contribucion_ponderada_features_con_deriva is not None:
         print(f"Contribución ponderada por coeficiente (0=ruido, 1=todo el peso del modelo): "
               f"{resultado.contribucion_ponderada_features_con_deriva:.2f}")
+    if resultado.deriva_score_psi is not None:
+        print(f"Deriva del score de salida: PSI={resultado.deriva_score_psi:.4f} ({resultado.deriva_score_interpretacion})")
     print(f"Recomienda recalibrar: {resultado.recomendacion_recalibrar}")
 
     if resultado.recomendacion_recalibrar and resultado.se_recalibro:
@@ -57,6 +59,8 @@ def main() -> None:
     reporte = {
         "n_features_con_deriva": resultado.n_features_con_deriva,
         "contribucion_ponderada_features_con_deriva": resultado.contribucion_ponderada_features_con_deriva,
+        "deriva_score_psi": resultado.deriva_score_psi,
+        "deriva_score_interpretacion": resultado.deriva_score_interpretacion,
         "recomendacion_recalibrar": resultado.recomendacion_recalibrar,
         "se_recalibro": resultado.se_recalibro,
         "version_artefacto_nueva": resultado.version_artefacto_nueva,

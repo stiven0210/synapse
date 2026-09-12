@@ -95,6 +95,34 @@ def test_no_sobreescribe_artefacto_vigente_si_recalibracion_falla(tmp_path):
     assert resultado.contribucion_ponderada_features_con_deriva == pytest.approx(1.0)
 
 
+def test_deriva_del_score_dispara_recalibracion_aunque_ninguna_feature_cruce_sola(tmp_path):
+    # El caso que justifica monitorear el score además de cada feature: un
+    # shift pequeño (0.12) repartido en las 28 features V deja a CADA UNA
+    # muy por debajo de PSI 0.25 -- pero el score combinado del artefacto
+    # vigente (que pesa las 28 por igual) sí cruza el umbral. Parámetros
+    # verificados a mano antes de escribir el test.
+    ruta = tmp_path / "artefacto.json"
+    artefacto_vigente = {
+        "version": 1, "fecha_calibracion": "2026-01-01T00:00:00", "modelo": "regresion_logistica",
+        "features": FEATURES,
+        "coeficientes": [1 / 28] * 28 + [0.0, 0.0, 0.0],  # solo V1..V28 pesan, Amount/recursivas en 0
+        "intercepto": 0.0, "umbral_decision": 0.5, "metricas_validacion": {},
+    }
+    publicar(artefacto_vigente, ruta)
+
+    referencia = _dataset_sintetico(n=5000, seed=0)
+    actual = _dataset_sintetico(n=5000, seed=2)
+    for v in [f"V{i}" for i in range(1, 29)]:
+        actual[v] = actual[v] + 0.12
+
+    resultado = evaluar_y_recalibrar_si_hace_falta(referencia, actual, columnas_deriva=FEATURES, ruta_artefacto=ruta)
+
+    assert resultado.n_features_con_deriva == 0  # ninguna feature individual cruzó sola
+    assert resultado.deriva_score_interpretacion == "deriva_significativa_recalibrar"
+    assert resultado.recomendacion_recalibrar is True  # el score solo ya basta para recomendar
+    assert resultado.se_recalibro is True
+
+
 def test_contribucion_ponderada_usa_los_coeficientes_del_artefacto_vigente(tmp_path):
     ruta = tmp_path / "artefacto.json"
     coeficientes = [0.0] * len(FEATURES)

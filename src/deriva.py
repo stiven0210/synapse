@@ -66,6 +66,18 @@ def evaluar_ks(referencia: np.ndarray, actual: np.ndarray) -> dict:
     return {"estadistico": float(estadistico), "pvalue": float(pvalue), "hay_deriva": bool(pvalue < UMBRAL_PVALUE_KS)}
 
 
+def evaluar_deriva_score(scores_referencia: np.ndarray, scores_actual: np.ndarray, n_bins: int = 10) -> dict:
+    """Igual que `evaluar_deriva()`, pero sobre el score de salida del
+    modelo -- no una feature de entrada. Complementa, no reemplaza, el
+    monitoreo por feature: el score agrega el efecto neto de deriva en
+    TODAS las features a través del modelo en un solo número, así que
+    puede moverse de forma significativa aunque ninguna feature individual
+    cruce sola el umbral de PSI (el caso que el monitoreo por feature, por
+    diseño, no puede ver)."""
+    psi = calcular_psi(scores_referencia, scores_actual, n_bins=n_bins)
+    return {"psi": psi, "psi_interpretacion": interpretar_psi(psi), "ks": evaluar_ks(scores_referencia, scores_actual)}
+
+
 def evaluar_deriva(df_referencia, df_actual, columnas: list, n_bins: int = 10) -> dict:
     """Corre PSI + KS sobre cada columna dada, devuelve un reporte por
     columna y un resumen de cuántas muestran deriva significativa."""
