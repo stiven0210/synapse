@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Dataset (144MB, público -- se descarga de la fuente en README, no se versiona)
+# y artefactos/reportes regenerables al correr los scripts.
+data/raw/*
+!data/raw/.gitkeep
+data/*.json
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
