@@ -364,12 +364,32 @@ determinista.
 
 20 tests nuevos (15 del agente + 5 del limitador). Suite completa: 90 tests.
 
-**Pendiente, explícitamente fuera de este alcance**: no existe todavía un
-job/script que conecte esto de punta a punta en producción (leer la
-bitácora real, filtrar escalamientos operativos, invocar el agente,
-mostrarle el resultado a un humano) — el foco de esta ronda fue la lógica
-del agente y su validación, no el cableado operativo. Tampoco se ha
-validado con `ANTHROPIC_API_KEY` real ni con incidentes reales (Nivel 3).
+### ✅ Job de triage de punta a punta — completo
+
+`scripts/triage_veto.py` cierra el cableado operativo: lee la bitácora
+real, filtra escalamientos operativos, arma el contexto (reporte de deriva
+más reciente si existe), invoca `AgenteTriage` a través del rate limiter, y
+muestra el resultado a un humano (consola + `data/reporte_triage_veto.json`).
+
+**Sin tráfico real de producción disponible**, el job primero alimenta la
+bitácora con los mismos 2 escenarios de causa real conocida de
+`tests/test_bitacora_decisiones.py` (feature en NaN, feature faltante, y
+una decisión normal de control) — así hay algo real que triar en vez de
+partir de un archivo vacío.
+
+**Degradación con gracia, verificada con una corrida real**: sin
+`ANTHROPIC_API_KEY` en el entorno, el job no inventa una llamada falsa —
+reporta explícitamente que no puede triar con un LLM real y cae al reporte
+plano (cada escalamiento operativo tal cual, sin hipótesis). `CircuitoAbierto`
+y `PresupuestoAgotado` se manejan igual si ocurren con un cliente real
+configurado: se cae al reporte plano para esa entrada, nunca se detiene el
+job completo.
+
+**Pendiente, explícitamente fuera de este alcance**: no se ha corrido con
+`ANTHROPIC_API_KEY` real (sin esa clave no hay forma de validar el cliente
+real ni el Nivel 3 — valor con incidentes reales). Tampoco existe todavía
+una fuente de tráfico de producción real que alimente la bitácora — hoy
+solo el job de ejemplo la alimenta con los 2 escenarios conocidos.
 
 ## Pendiente del plan de pruebas más amplio (no bloqueante)
 

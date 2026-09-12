@@ -87,7 +87,8 @@ synapse/
 ├── scripts/
 │   ├── validacion_end_to_end.py
 │   ├── deteccion_deriva.py
-│   └── recalibracion_automatica.py   # disparador de recalibración, end-to-end
+│   ├── recalibracion_automatica.py   # disparador de recalibración, end-to-end
+│   └── triage_veto.py                # bitácora -> agente de triage -> reporte para un humano
 ├── src/
 │   ├── artefacto.py       # contrato compartido (validación ADR_001)
 │   ├── calibrador.py
