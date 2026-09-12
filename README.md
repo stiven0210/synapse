@@ -10,6 +10,26 @@ Featurespace, feature stores como Tecton/Feast). El objetivo aquí es una
 implementación simple, abierta y bien entendida del mismo patrón, no
 inventar algo sin precedentes.
 
+## Para quién es esto
+
+No es un tutorial de introducción (asume que ya sabes por qué importa el
+train/serve skew) ni está pensado para equipos que ya operan una
+plataforma empresarial para esto (Feedzai, Featurespace, un feature store
+tipo Tecton/Feast) — esos ya tienen el problema resuelto. El encaje real es
+un ingeniero solo o un equipo chico construyendo esto con un asistente de
+codificación con IA, en una escala o presupuesto donde comprar esa
+plataforma no se justifica. Ese encaje no es solo cuestión de tamaño de
+empresa: un equipo chico *dentro* de una organización grande y regulada
+(un equipo de innovación de un banco construyendo internamente en vez de
+comprar) encaja igual o mejor — una decisión de construir-vs-comprar bajo
+escrutinio de compliance necesita el historial de ADRs, la auditoría
+escrita, y la capa de Veto con fail-closed documentados aquí, no como
+overhead sino como lo que permite que la decisión sobreviva una revisión.
+La evidencia en la que se apoya este patrón (latencia medida en
+microsegundos, precisión/recall reales, una auditoría escrita de bugs
+encontrados *y* corregidos) está pensada para ese lector escéptico bajo
+escrutinio, no para un pitch de marketing.
+
 ## Estado
 
 6 fases completas + auditoría post-implementación (12 hallazgos, 10
