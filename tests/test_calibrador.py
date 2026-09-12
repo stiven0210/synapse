@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.calibrador import DatasetInvalido, FEATURES, cargar_dataset, calibrar, guardar_artefacto, split_temporal
+from src.calibrador import DatasetInvalido, FEATURES, _mejor_umbral_por_f1, cargar_dataset, calibrar, guardar_artefacto, split_temporal
 from src.features_recursivas import calcular_features_recursivas_batch
 
 
@@ -148,6 +148,22 @@ def test_calibrar_sin_positivos_en_train_lanza_error():
 
     with pytest.raises(DatasetInvalido, match="train"):
         calibrar(train, val)
+
+
+def test_mejor_umbral_por_f1_no_queda_topado_cuando_el_optimo_esta_sobre_0_99():
+    # Hallazgo real (ver docstring de _mejor_umbral_por_f1): con separación fuerte,
+    # todos los scores -- de ambas clases -- pueden caer por encima de 0.99. La
+    # versión vieja (grilla fija hasta 0.99) nunca podía separar este caso: todo
+    # candidato <= 0.99 predice TODO como positivo (F1 forzado a 0.5714, ver cálculo
+    # a mano abajo). El umbral verdaderamente óptimo (0.998) sí separa perfecto.
+    y_true = np.array([0, 0, 0, 1, 1])
+    scores = np.array([0.991, 0.993, 0.995, 0.998, 0.9995])
+
+    umbral = _mejor_umbral_por_f1(y_true, scores)
+
+    y_pred = (scores >= umbral).astype(int)
+    assert list(y_pred) == [0, 0, 0, 1, 1]  # separación perfecta -- F1 = 1.0
+    assert umbral > 0.99  # el hallazgo: el óptimo real está fuera del rango que exploraba la grilla vieja
 
 
 def test_calibrar_sin_positivos_en_val_lanza_error():

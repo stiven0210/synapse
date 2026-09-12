@@ -17,8 +17,9 @@ corregidos) + detección de deriva (con ponderación por magnitud de
 coeficiente) + disparador de recalibración automática (deriva ->
 recalibración -> publicación -> recarga en vivo) + bitácora de decisiones +
 agente de triage de escalamientos de Veto (LLM en capa lenta, con
-grounding y auditor selectivo, nunca en el camino caliente). **95 tests,
-todos en verde.**
+grounding y auditor selectivo, nunca en el camino caliente) + validación
+cruzada walk-forward multi-fold + umbral de decisión por costo esperado
+(análisis, no reemplaza producción). **106 tests, todos en verde.**
 
 ## Las piezas
 
@@ -61,10 +62,10 @@ sobre el tramo de prueba nunca antes visto):
 
 | | Precisión | Recall | F1 |
 |---|---|---|---|
-| SYNAPSE (dos capas) | 0.50 | 0.79 | 0.61 |
+| SYNAPSE (dos capas) | 0.93 | 0.67 | 0.78 |
 | Baseline (umbral fijo, sin calibrar) | 0.00 | 0.00 | 0.00 |
 
-Latencia real medida: **8.6 microsegundos/decisión** de punta a punta
+Latencia real medida: **8.3 microsegundos/decisión** de punta a punta
 (Ejecutor + Veto) — el requisito real de la industria es p99 < 50
 *milisegundos*, así que esto está muy por debajo del cuello de botella real
 (no vale la pena optimizar más la velocidad; sí vale la pena seguir
@@ -102,7 +103,9 @@ synapse/
 │   ├── disparador_recalibracion.py   # conecta deriva -> calibrador -> puente
 │   ├── bitacora_decisiones.py        # registro de decisiones, base para triar Veto
 │   ├── agente_triage.py              # LLM en capa lenta: hipótesis sobre escalamientos operativos
-│   └── limitador_llamadas.py         # rate limiting diario del agente de triage
+│   ├── limitador_llamadas.py         # rate limiting diario del agente de triage
+│   ├── validacion_cruzada.py         # walk-forward multi-fold, diagnóstico de estabilidad
+│   └── costo_decision.py             # umbral por costo esperado, análisis -- no reemplaza producción
 └── tests/
 ```
 

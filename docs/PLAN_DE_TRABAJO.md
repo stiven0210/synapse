@@ -38,10 +38,13 @@ completo y opciones en `ADR_002`.
       contra el modelo escalado original, `test_coeficientes_desescalados_...`).
 - [x] Umbral de decisión: el que maximiza F1 en el tramo de validación
       (no 0.5 fijo — con `class_weight="balanced"` el umbral óptimo real
-      queda lejos de 0.5).
+      queda lejos de 0.5, de hecho por encima de 0.99 — ver corrección más
+      abajo, "Hallazgo real: grilla de umbral topada en 0.99").
 - [x] **Métricas reales en validación** (56,961 transacciones, 57 fraudes):
-      precisión 0.46, recall 0.79, F1 0.58, **AUC 0.972**. Consistente con
+      precisión 0.93, recall 0.70, F1 0.80, **AUC 0.972**. Consistente con
       benchmarks publicados de regresión logística sobre este dataset.
+      (Corregido tras el hallazgo de la validación cruzada walk-forward —
+      antes de la corrección: precisión 0.46, recall 0.79, F1 0.58, mismo AUC.)
 - [x] 6 tests (`tests/test_calibrador.py`), incluyendo la verificación
       algebraica exacta del des-escalado.
 - [x] **Corrección importante**: el modelo original solo usaba V1-V28+Amount
@@ -102,8 +105,12 @@ Amount, sin calibrar, sin features recursivas, sin veto):**
 
 | | Precisión | Recall | F1 |
 |---|---|---|---|
-| SYNAPSE | 0.50 | 0.79 | 0.61 |
+| SYNAPSE | 0.93 | 0.67 | 0.78 |
 | Baseline (umbral fijo) | 0.00 | 0.00 | 0.00 |
+
+(Corregido tras el hallazgo de la validación cruzada walk-forward — antes
+de la corrección: precisión 0.50, recall 0.79, F1 0.61. Ver "Hallazgo real:
+grilla de umbral topada en 0.99" más abajo.)
 
 El baseline **no detecta ni un solo fraude** de los 75 en el tramo de
 prueba — verificado que no es un bug: el fraude más grande en test es de
@@ -114,7 +121,7 @@ que un umbral fijo sobre el monto no puede capturar y que SÍ recogen las
 features V1-V28 (PCA) + las recursivas.
 
 **Latencia real de punta a punta** (Ejecutor + Veto, 56,962 decisiones):
-**8.03 microsegundos/decisión** — más que en el benchmark aislado de Fase 2
+**8.3 microsegundos/decisión** — más que en el benchmark aislado de Fase 2
 (2.15 µs) porque ahora incluye también la evaluación del Veto, pero sigue
 siendo microsegundos, no milisegundos.
 
@@ -420,12 +427,82 @@ no está concentrada en lo que el modelo más pesa.
 mano y protección contra división por cero; 1 en
 `test_disparador_recalibracion.py`). Suite completa: 95 tests.
 
+### ✅ Validación cruzada walk-forward multi-fold — completo
+
+`src/validacion_cruzada.py` responde si el AUC/umbral reportado en Fase 1
+depende de qué corte particular se usó, o si el proceso de calibración es
+estable en el tiempo. Ventana expansiva (nunca K-fold aleatorio, que
+filtraría futuro hacia el pasado). Diagnóstico únicamente — no reemplaza
+`split_temporal()`+`calibrar()`, que siguen siendo la única vía de
+producción (solo puede existir un artefacto vigente a la vez).
+
+**Resultado real** (`scripts/validacion_cruzada_walk_forward.py`, 5 folds
+sobre el dataset real): AUC = 0.9775 ± 0.0066 entre folds — consistente y
+estable, el 0.972 de un único split **no es un accidente de corte**.
+
+**Hallazgo real durante esta validación: grilla de umbral topada en 0.99.**
+Los 5 folds dieron el umbral óptimo exactamente en el límite de la grilla
+de búsqueda (`np.linspace(0.01, 0.99, 99)` en `calibrador._mejor_umbral_por_f1`),
+sin variación — señal de que el óptimo real quedaba fuera del rango
+explorado, no de que 0.99 fuera genuinamente el mejor valor. Verificado a
+mano: sobre el tramo de validación real, el F1 seguía subiendo de 0.58 (en
+0.99) a 0.79 (en 0.99999). Causa: con `class_weight="balanced"` y
+separación fuerte entre clases, las probabilidades se concentran cerca de
+0 y 1.
+
+**Corregido**: `_mejor_umbral_por_f1` ahora busca sobre los scores
+realmente observados vía `precision_recall_curve` (O(n log n), umbral
+óptimo exacto, no una aproximación de grilla) en vez de una grilla fija.
+Esto **cambió las métricas reales reportadas en Fase 1 y Fase 5** (ver esas
+secciones, ya actualizadas) — precisión subió de ~0.50 a ~0.93, F1 de ~0.61
+a ~0.78 (recall bajó de ~0.79 a ~0.67, el balance neto mejora). El AUC no
+cambia (es independiente del umbral) — sirvió como control de que la
+corrección no tocó nada más.
+
+6 tests nuevos (5 en `test_validacion_cruzada.py` + 1 caso numérico armado
+a mano en `test_calibrador.py` que reproduce exactamente el bug: scores de
+ambas clases por encima de 0.99, donde la grilla vieja fuerza F1=0.57 y la
+nueva encuentra la separación perfecta). Suite completa: 101 tests.
+
+### Umbral de decisión por costo esperado — construido con un supuesto de negocio explícito, sin reemplazar producción
+
+Pendiente real (no se puede resolver sin datos de negocio que este proyecto
+no tiene): el costo de un falso positivo (fricción/revisión de una
+transacción legítima bloqueada) no está en ningún dataset público. El
+costo de un falso negativo (fraude no detectado) sí — es el `Amount` real
+de la transacción no detectada, no un promedio inventado.
+
+`src/costo_decision.py` (`mejor_umbral_por_costo()`) **exige explícitamente**
+`costo_falso_positivo` como parámetro, sin default — pasar un número
+inventado como si fuera un dato validado violaría "ningún parámetro no
+justificado tiene valor por defecto silencioso" (`CLAUDE.md`). **No
+reemplaza el umbral de F1 que usa `calibrar()`** (el único justificado con
+datos reales que este proyecto tiene) — es una herramienta de comparación,
+no un cambio de producción.
+
+`scripts/comparacion_umbral_por_costo.py` corre la comparación sobre el
+tramo de prueba real con un supuesto **ilustrativo** de $5 por falso
+positivo (marcado explícitamente en el código y en el reporte como no
+validado). **Resultado real**: el umbral por costo (0.985) da F1 más bajo
+que el de producción (0.61 vs 0.78 — precisión cae de 0.94 a 0.49) pero
+**reduce el costo total esperado de 3,352 a 2,713** — captura más fraude
+real (recall 0.67 → 0.80) porque, bajo ese supuesto, un falso positivo es
+barato frente al costo de dejar pasar un fraude. Demuestra concretamente
+que optimizar F1 y optimizar costo esperado no son lo mismo — la decisión
+de cuál usar en producción sigue pendiente de un costo de falso positivo
+real, no inventado.
+
+11 tests nuevos desde el commit anterior (5 en `test_costo_decision.py`,
+incluyendo el caso numérico armado a mano que demuestra la divergencia
+F1-vs-costo; 5 en `test_validacion_cruzada.py`; 1 en `test_calibrador.py`
+para la corrección del umbral de F1). Suite completa: 106 tests.
+
 ## Pendiente del plan de pruebas más amplio (no bloqueante)
 
-Quedan por construir, del plan de pruebas discutido en conversación: umbral
-de decisión por costo esperado (no solo F1), validación cruzada temporal
-con múltiples folds walk-forward, y el dataset con identificador de cuenta
-(IEEE-CIS) para probar personalización por entidad.
+El dataset IEEE-CIS (identificador de cuenta, para probar personalización
+por entidad) sigue bloqueado — requiere la cuenta de Kaggle del usuario,
+unirse a la competencia y un token de API real; no hay forma honesta de
+sustituir eso con un supuesto.
 
 ### Hallazgo de la investigación de concurrencia — documentado, sin corrección de código
 

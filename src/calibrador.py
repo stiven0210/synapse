@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.metrics import f1_score, precision_recall_curve, precision_score, recall_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 
 from src.features_recursivas import calcular_features_recursivas_batch
@@ -78,13 +78,29 @@ def _desescalar(coef_escalados: np.ndarray, intercepto: float, escalador: Standa
 
 
 def _mejor_umbral_por_f1(y_true: np.ndarray, scores: np.ndarray) -> float:
-    mejor_umbral, mejor_f1 = 0.5, -1.0
-    for umbral in np.linspace(0.01, 0.99, 99):
-        y_pred = (scores >= umbral).astype(int)
-        f1 = f1_score(y_true, y_pred, zero_division=0)
-        if f1 > mejor_f1:
-            mejor_umbral, mejor_f1 = float(umbral), f1
-    return mejor_umbral
+    """Busca sobre los scores realmente observados (vía `precision_recall_curve`,
+    que evalúa cada umbral relevante en O(n log n)), no una grilla fija.
+
+    **Corrección de un hallazgo real** (`docs/PLAN_DE_TRABAJO.md`, validación
+    cruzada walk-forward): la versión anterior usaba `np.linspace(0.01, 0.99, 99)`,
+    topada en 0.99. Con `class_weight="balanced"` y separación fuerte entre
+    clases, las probabilidades se concentran cerca de 0 y 1 — el umbral
+    óptimo real en el dataset de producción quedaba en (0.99, 1.0), fuera
+    del rango que la grilla anterior exploraba. Verificado a mano: F1 seguía
+    subiendo de 0.58 (en 0.99, el tope viejo) a 0.79 (en 0.99999) sobre el
+    tramo de validación real. Los únicos umbrales que importan son los
+    scores observados -- entre dos scores consecutivos la partición
+    predicha no cambia, así que esto encuentra el óptimo exacto, no una
+    aproximación de grilla."""
+    precisiones, recalls, umbrales = precision_recall_curve(y_true, scores)
+    if len(umbrales) == 0:
+        return 0.5  # ningún caso positivo en y_true -- calibrar() ya valida esto antes de llegar aquí
+    # precision_recall_curve devuelve un punto extra al final (recall=0, precision=1)
+    # sin umbral asociado -- se descarta para alinear longitudes.
+    precisiones, recalls = precisiones[:-1], recalls[:-1]
+    denominador = precisiones + recalls
+    f1s = np.divide(2 * precisiones * recalls, denominador, out=np.zeros_like(denominador), where=denominador > 0)
+    return float(umbrales[np.argmax(f1s)])
 
 
 def calibrar(df_train: pd.DataFrame, df_val: pd.DataFrame) -> dict:
