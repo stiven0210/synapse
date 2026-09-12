@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.calibrador import FEATURES
 from src.disparador_recalibracion import evaluar_y_recalibrar_si_hace_falta
@@ -43,6 +44,7 @@ def test_sin_deriva_no_recalibra_ni_publica(tmp_path):
     assert resultado.se_recalibro is False
     assert resultado.version_artefacto_nueva is None
     assert resultado.error is None
+    assert resultado.contribucion_ponderada_features_con_deriva is None  # sin artefacto vigente todavía
     assert not ruta.exists()
 
 
@@ -58,6 +60,7 @@ def test_con_deriva_significativa_recalibra_y_publica(tmp_path):
     assert resultado.se_recalibro is True
     assert resultado.version_artefacto_nueva is not None
     assert resultado.error is None
+    assert resultado.contribucion_ponderada_features_con_deriva is None  # sin artefacto vigente todavía
     assert ruta.exists()
     assert leer_vigente(ruta)["version"] == resultado.version_artefacto_nueva
 
@@ -85,6 +88,29 @@ def test_no_sobreescribe_artefacto_vigente_si_recalibracion_falla(tmp_path):
     actual = _dataset_sintetico(n=2000, seed=3, con_fraude=False)
     actual["Amount"] = actual["Amount"] * 5.0 + 1000.0
 
-    evaluar_y_recalibrar_si_hace_falta(referencia, actual, columnas_deriva=FEATURES, ruta_artefacto=ruta)
+    resultado = evaluar_y_recalibrar_si_hace_falta(referencia, actual, columnas_deriva=FEATURES, ruta_artefacto=ruta)
 
     assert leer_vigente(ruta) == ARTEFACTO_VIEJO
+    # ARTEFACTO_VIEJO solo conoce "Amount" (coeficiente 0.1) y "Amount" derivó -> 100% del peso conocido derivó
+    assert resultado.contribucion_ponderada_features_con_deriva == pytest.approx(1.0)
+
+
+def test_contribucion_ponderada_usa_los_coeficientes_del_artefacto_vigente(tmp_path):
+    ruta = tmp_path / "artefacto.json"
+    coeficientes = [0.0] * len(FEATURES)
+    coeficientes[FEATURES.index("Amount")] = 4.0  # el resto en 0 -- solo "Amount" pesa en el score vigente
+    artefacto_vigente = {
+        "version": 1, "fecha_calibracion": "2026-01-01T00:00:00", "modelo": "regresion_logistica",
+        "features": FEATURES, "coeficientes": coeficientes, "intercepto": -1.0,
+        "umbral_decision": 0.5, "metricas_validacion": {},
+    }
+    publicar(artefacto_vigente, ruta)
+
+    referencia = _dataset_sintetico(n=2000, seed=0)
+    actual = _dataset_sintetico(n=2000, seed=2)
+    actual["Amount"] = actual["Amount"] * 5.0 + 1000.0  # solo Amount deriva fuerte
+
+    resultado = evaluar_y_recalibrar_si_hace_falta(referencia, actual, columnas_deriva=FEATURES, ruta_artefacto=ruta)
+
+    # "Amount" es el único feature con peso (4.0) en el artefacto vigente y el único que derivó -> 1.0
+    assert resultado.contribucion_ponderada_features_con_deriva == pytest.approx(1.0)

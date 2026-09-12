@@ -13,11 +13,12 @@ inventar algo sin precedentes.
 ## Estado
 
 6 fases completas + auditoría post-implementación (12 hallazgos, 10
-corregidos) + detección de deriva + disparador de recalibración automática
-(deriva -> recalibración -> publicación -> recarga en vivo) + bitácora de
-decisiones + agente de triage de escalamientos de Veto (LLM en capa lenta,
-con grounding y auditor selectivo, nunca en el camino caliente). **90
-tests, todos en verde.**
+corregidos) + detección de deriva (con ponderación por magnitud de
+coeficiente) + disparador de recalibración automática (deriva ->
+recalibración -> publicación -> recarga en vivo) + bitácora de decisiones +
+agente de triage de escalamientos de Veto (LLM en capa lenta, con
+grounding y auditor selectivo, nunca en el camino caliente). **95 tests,
+todos en verde.**
 
 ## Las piezas
 

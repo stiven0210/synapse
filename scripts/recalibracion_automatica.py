@@ -40,6 +40,9 @@ def main() -> None:
         df_referencia=train, df_actual=test, columnas_deriva=FEATURES, ruta_artefacto=RUTA_ARTEFACTO,
     )
     print(f"\nDeriva evaluada: {resultado.n_features_con_deriva} / {len(FEATURES)} features con deriva significativa")
+    if resultado.contribucion_ponderada_features_con_deriva is not None:
+        print(f"Contribución ponderada por coeficiente (0=ruido, 1=todo el peso del modelo): "
+              f"{resultado.contribucion_ponderada_features_con_deriva:.2f}")
     print(f"Recomienda recalibrar: {resultado.recomendacion_recalibrar}")
 
     if resultado.recomendacion_recalibrar and resultado.se_recalibro:
@@ -53,6 +56,7 @@ def main() -> None:
 
     reporte = {
         "n_features_con_deriva": resultado.n_features_con_deriva,
+        "contribucion_ponderada_features_con_deriva": resultado.contribucion_ponderada_features_con_deriva,
         "recomendacion_recalibrar": resultado.recomendacion_recalibrar,
         "se_recalibro": resultado.se_recalibro,
         "version_artefacto_nueva": resultado.version_artefacto_nueva,

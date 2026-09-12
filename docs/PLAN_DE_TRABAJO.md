@@ -391,10 +391,63 @@ real ni el Nivel 3 — valor con incidentes reales). Tampoco existe todavía
 una fuente de tráfico de producción real que alimente la bitácora — hoy
 solo el job de ejemplo la alimenta con los 2 escenarios conocidos.
 
+### ✅ Deriva ponderada por magnitud de coeficiente — completo
+
+`evaluar_deriva()` trataba todas las features igual: cualquiera que
+superara PSI 0.25 contaba lo mismo para `recomendacion_recalibrar`, sin
+distinguir una feature que el modelo realmente pesa de una que casi no usa.
+`deriva.ponderar_deriva_por_coeficiente()` enriquece el reporte con la
+magnitud de coeficiente de cada feature en el artefacto vigente y calcula
+`contribucion_ponderada_features_con_deriva` (0 a 1: qué fracción del peso
+total del modelo está en las features que sí derivaron).
+
+**Deliberadamente no reemplaza `recomendacion_recalibrar`** — cambiar el
+disparador automático con un umbral nuevo sobre la contribución ponderada
+sería un parámetro no justificado empíricamente. Es información adicional
+para juicio humano, no una nueva regla automática.
+
+`disparador_recalibracion.py` la calcula automáticamente usando los
+coeficientes del artefacto vigente (antes de una posible recalibración) —
+si no hay artefacto legible todavía, queda en `None` sin bloquear nada.
+`scripts/recalibracion_automatica.py` la reporta.
+
+**Resultado real** (mismo par train/test de `deteccion_deriva.py`): de las
+8/31 features con deriva significativa, solo el **23%** del peso total del
+modelo (suma de |coeficiente|) está en esas features — la deriva encontrada
+no está concentrada en lo que el modelo más pesa.
+
+5 tests nuevos (4 en `test_deriva.py`, incluyendo caso numérico armado a
+mano y protección contra división por cero; 1 en
+`test_disparador_recalibracion.py`). Suite completa: 95 tests.
+
 ## Pendiente del plan de pruebas más amplio (no bloqueante)
 
 Quedan por construir, del plan de pruebas discutido en conversación: umbral
 de decisión por costo esperado (no solo F1), validación cruzada temporal
-con múltiples folds walk-forward, prueba de carga/concurrencia real del
-Ejecutor, y el dataset con identificador de cuenta (IEEE-CIS) para probar
-personalización por entidad.
+con múltiples folds walk-forward, y el dataset con identificador de cuenta
+(IEEE-CIS) para probar personalización por entidad.
+
+### Hallazgo de la investigación de concurrencia — documentado, sin corrección de código
+
+Se probó `CicloDecision`/`Ejecutor` bajo llamadas concurrentes reales desde
+múltiples hilos (16 hilos, 300 llamadas c/u, con `time.sleep(0)` forzando
+cesión del GIL para maximizar interleaving) — sin excepciones ni corrupción
+observada en las corridas. Pero eso no es una garantía: `EstadoRecursivoGlobal`
+no tiene ningún tipo de sincronización, y su corrección depende de que las
+transacciones lleguen **en un único stream secuencial, en orden de `Time`**
+(`TiempoFueraDeOrden` lo asume explícitamente). Que el GIL de CPython no haya
+expuesto una corrupción visible en estas corridas no prueba que sea seguro
+bajo otra carga/hardware/versión de Python.
+
+**Conclusión, sin cambiar código:** `CicloDecision` está diseñado para un
+único hilo procesando un stream secuencial — nunca se documentó
+explícitamente esta restricción. No hace falta agregar locking: el punto
+entero de decisiones O(1) en microsegundos es que un solo hilo ya cubre
+volúmenes reales de fraude con margen enorme (el dataset promedia ~1.6
+tx/seg; incluso a 10 microsegundos/decisión, un hilo cubre >90,000 tx/seg).
+Si alguna vez hace falta paralelismo real, la forma correcta es particionar
+por cuenta/entidad (cuando exista ese identificador, ver limitación de
+Fase 0), nunca compartir una misma instancia de `Ejecutor` entre hilos.
+Pendiente: dejar esta restricción explícita en `CLAUDE.md`/`ejecutor.py`
+(no se tocó código de producción en esta ronda, solo se investigó y se
+documenta el hallazgo).

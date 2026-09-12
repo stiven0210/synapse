@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.deriva import calcular_psi, evaluar_deriva, evaluar_ks, interpretar_psi
+from src.deriva import calcular_psi, evaluar_deriva, evaluar_ks, interpretar_psi, ponderar_deriva_por_coeficiente
 
 
 def test_psi_misma_distribucion_es_cercano_a_cero():
@@ -79,3 +79,66 @@ def test_evaluar_deriva_sin_ninguna_columna_con_deriva_no_recomienda_recalibrar(
     reporte = evaluar_deriva(df_ref, df_actual, columnas=["a"])
 
     assert reporte["recomendacion_recalibrar"] is False
+
+
+def test_ponderar_deriva_por_coeficiente_calcula_contribucion_ponderada():
+    rng = np.random.default_rng(2)
+    df_ref = pd.DataFrame({
+        "a": rng.normal(0, 1, 2000),
+        "b": rng.normal(0, 1, 2000),
+        "c": rng.normal(0, 1, 2000),
+    })
+    df_actual = pd.DataFrame({
+        "a": rng.normal(6, 1, 2000),  # deriva fuerte
+        "b": rng.normal(0, 1, 2000),  # sin deriva
+        "c": rng.normal(6, 1, 2000),  # deriva fuerte
+    })
+    reporte = evaluar_deriva(df_ref, df_actual, columnas=["a", "b", "c"])
+    assert reporte["por_feature"]["a"]["psi_interpretacion"] == "deriva_significativa_recalibrar"
+    assert reporte["por_feature"]["b"]["psi_interpretacion"] == "sin_deriva_significativa"
+    assert reporte["por_feature"]["c"]["psi_interpretacion"] == "deriva_significativa_recalibrar"
+
+    # peso_total = |3| + |1| + |0| = 4 -- "a" y "c" derivaron, pesan 3+0=3 -> 3/4 = 0.75
+    ponderado = ponderar_deriva_por_coeficiente(reporte, features=["a", "b", "c"], coeficientes=[3.0, 1.0, 0.0])
+
+    assert ponderado["contribucion_ponderada_features_con_deriva"] == pytest.approx(0.75)
+    assert ponderado["por_feature"]["a"]["peso_relativo_en_score"] == pytest.approx(0.75)
+    assert ponderado["por_feature"]["b"]["peso_relativo_en_score"] == pytest.approx(0.25)
+    assert ponderado["por_feature"]["c"]["peso_relativo_en_score"] == pytest.approx(0.0)
+    assert ponderado["recomendacion_recalibrar"] == reporte["recomendacion_recalibrar"]
+    assert ponderado["n_features_con_deriva_psi"] == reporte["n_features_con_deriva_psi"]
+
+
+def test_ponderar_deriva_sin_features_con_deriva_da_contribucion_cero():
+    rng = np.random.default_rng(3)
+    df_ref = pd.DataFrame({"a": rng.normal(0, 1, 2000)})
+    df_actual = pd.DataFrame({"a": rng.normal(0, 1, 2000)})
+    reporte = evaluar_deriva(df_ref, df_actual, columnas=["a"])
+
+    ponderado = ponderar_deriva_por_coeficiente(reporte, features=["a"], coeficientes=[5.0])
+    assert ponderado["contribucion_ponderada_features_con_deriva"] == 0.0
+
+
+def test_ponderar_deriva_con_todos_los_coeficientes_en_cero_no_divide_por_cero():
+    rng = np.random.default_rng(4)
+    df_ref = pd.DataFrame({"a": rng.normal(0, 1, 2000)})
+    df_actual = pd.DataFrame({"a": rng.normal(6, 1, 2000)})
+    reporte = evaluar_deriva(df_ref, df_actual, columnas=["a"])
+
+    ponderado = ponderar_deriva_por_coeficiente(reporte, features=["a"], coeficientes=[0.0])
+    assert ponderado["contribucion_ponderada_features_con_deriva"] == 0.0
+    assert ponderado["por_feature"]["a"]["peso_relativo_en_score"] is None
+
+
+def test_ponderar_deriva_feature_sin_coeficiente_conocido_no_cuenta_en_contribucion():
+    rng = np.random.default_rng(5)
+    df_ref = pd.DataFrame({"a": rng.normal(0, 1, 2000), "d": rng.normal(0, 1, 2000)})
+    df_actual = pd.DataFrame({"a": rng.normal(0, 1, 2000), "d": rng.normal(6, 1, 2000)})
+    reporte = evaluar_deriva(df_ref, df_actual, columnas=["a", "d"])  # "d" derivó
+
+    # el artefacto vigente solo conoce "a" -- "d" no está en features/coeficientes
+    ponderado = ponderar_deriva_por_coeficiente(reporte, features=["a"], coeficientes=[2.0])
+
+    assert ponderado["por_feature"]["d"]["coeficiente"] is None
+    assert ponderado["por_feature"]["d"]["peso_relativo_en_score"] is None
+    assert ponderado["contribucion_ponderada_features_con_deriva"] == 0.0  # "d" no pesa nada en el score vigente

@@ -82,3 +82,45 @@ def evaluar_deriva(df_referencia, df_actual, columnas: list, n_bins: int = 10) -
         "n_features_con_deriva_psi": n_con_deriva_psi,
         "recomendacion_recalibrar": n_con_deriva_psi > 0,
     }
+
+
+def ponderar_deriva_por_coeficiente(reporte_deriva: dict, features: list, coeficientes: list) -> dict:
+    """Enriquece el reporte de `evaluar_deriva()` con la magnitud del
+    coeficiente de cada feature en el artefacto vigente -- ayuda a
+    distinguir deriva en una feature que el modelo realmente usa (coeficiente
+    grande) de deriva en una que casi no importa (coeficiente cerca de 0).
+
+    **No cambia `recomendacion_recalibrar`** (sigue siendo el estándar de
+    industria de PSI > 0.25 por feature, sin alterar) -- introducir un
+    umbral nuevo sobre la contribución ponderada sería un parámetro no
+    justificado empíricamente (ver `CLAUDE.md`: "ningún parámetro no
+    justificado tiene valor por defecto silencioso"). Esto es información
+    adicional para que un humano juzgue si la recalibración recomendada la
+    empujan features estructuralmente importantes o ruido en features que
+    el modelo casi no pesa -- `contribucion_ponderada_features_con_deriva`
+    en [0, 1]: qué fracción del peso total del modelo (suma de |coeficiente|)
+    está en las features que sí muestran deriva significativa."""
+    coef_por_feature = dict(zip(features, coeficientes))
+    peso_total = sum(abs(c) for c in coeficientes)
+
+    por_feature = {}
+    for nombre, datos in reporte_deriva["por_feature"].items():
+        coef = coef_por_feature.get(nombre)
+        peso_relativo = (abs(coef) / peso_total) if (coef is not None and peso_total > 0) else None
+        por_feature[nombre] = {**datos, "coeficiente": coef, "peso_relativo_en_score": peso_relativo}
+
+    features_con_deriva = [
+        nombre for nombre, datos in reporte_deriva["por_feature"].items()
+        if datos["psi_interpretacion"] == "deriva_significativa_recalibrar"
+    ]
+    contribucion = (
+        sum(abs(coef_por_feature.get(nombre, 0.0)) for nombre in features_con_deriva) / peso_total
+        if peso_total > 0 else 0.0
+    )
+
+    return {
+        "por_feature": por_feature,
+        "n_features_con_deriva_psi": reporte_deriva["n_features_con_deriva_psi"],
+        "recomendacion_recalibrar": reporte_deriva["recomendacion_recalibrar"],
+        "contribucion_ponderada_features_con_deriva": contribucion,
+    }

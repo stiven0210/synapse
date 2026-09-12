@@ -14,6 +14,18 @@ distingue NaN) y por el Puente. Este módulo se deja de bajo nivel a
 propósito, para que Calibrador/Ejecutor sigan siendo independientes y
 testeables por separado — la garantía de seguridad vive en `ciclo.py`, no
 aquí.
+
+**No es thread-safe, por diseño, no por descuido.** `EstadoRecursivoGlobal`
+no tiene ninguna sincronización, y `TiempoFueraDeOrden` asume que las
+transacciones llegan en un único stream secuencial, en orden de `Time` —
+llamar `decidir()` desde múltiples hilos sobre la misma instancia no está
+soportado (investigado con carga real concurrente, ver
+`docs/PLAN_DE_TRABAJO.md`). No hace falta locking: el punto entero de
+decisiones O(1) en microsegundos es que un solo hilo ya cubre volúmenes
+reales de fraude con margen enorme. Si algún día hace falta paralelismo
+real, la forma correcta es particionar por cuenta/entidad (cuando exista
+ese identificador, ver limitación de Fase 0 en `ADR_002`), nunca compartir
+una instancia de `Ejecutor` entre hilos.
 """
 import copy
 import math

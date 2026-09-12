@@ -17,18 +17,35 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.artefacto import ArtefactoInvalido
 from src.calibrador import DatasetInvalido, calibrar, split_temporal
-from src.deriva import evaluar_deriva
-from src.puente import publicar
+from src.deriva import evaluar_deriva, ponderar_deriva_por_coeficiente
+from src.puente import leer_vigente, publicar
 
 
 @dataclass
 class ResultadoDisparador:
     recomendacion_recalibrar: bool
     n_features_con_deriva: int
+    contribucion_ponderada_features_con_deriva: float | None
     se_recalibro: bool
     version_artefacto_nueva: int | None
     error: str | None
+
+
+def _contribucion_ponderada(reporte: dict, ruta_artefacto: Path) -> float | None:
+    """Pondera la deriva encontrada por la magnitud de los coeficientes del
+    artefacto VIGENTE (antes de una posible recalibración) -- ver
+    `deriva.ponderar_deriva_por_coeficiente`. Si no hay artefacto vigente
+    legible todavía (primera corrida, archivo corrupto), no bloquea la
+    evaluación de deriva -- simplemente no hay con qué ponderar."""
+    try:
+        artefacto_vigente = leer_vigente(ruta_artefacto)
+    except (FileNotFoundError, ArtefactoInvalido):
+        return None
+    return ponderar_deriva_por_coeficiente(
+        reporte, features=artefacto_vigente["features"], coeficientes=artefacto_vigente["coeficientes"]
+    )["contribucion_ponderada_features_con_deriva"]
 
 
 def evaluar_y_recalibrar_si_hace_falta(
@@ -47,11 +64,13 @@ def evaluar_y_recalibrar_si_hace_falta(
     queda intacto y el error se reporta para revisión humana en vez de
     fallar en silencio o degradar el modelo con una calibración mala."""
     reporte = evaluar_deriva(df_referencia, df_actual, columnas=columnas_deriva)
+    contribucion_ponderada = _contribucion_ponderada(reporte, ruta_artefacto)
 
     if not reporte["recomendacion_recalibrar"]:
         return ResultadoDisparador(
             recomendacion_recalibrar=False,
             n_features_con_deriva=reporte["n_features_con_deriva_psi"],
+            contribucion_ponderada_features_con_deriva=contribucion_ponderada,
             se_recalibro=False,
             version_artefacto_nueva=None,
             error=None,
@@ -65,6 +84,7 @@ def evaluar_y_recalibrar_si_hace_falta(
         return ResultadoDisparador(
             recomendacion_recalibrar=True,
             n_features_con_deriva=reporte["n_features_con_deriva_psi"],
+            contribucion_ponderada_features_con_deriva=contribucion_ponderada,
             se_recalibro=False,
             version_artefacto_nueva=None,
             error=str(e),
@@ -73,6 +93,7 @@ def evaluar_y_recalibrar_si_hace_falta(
     return ResultadoDisparador(
         recomendacion_recalibrar=True,
         n_features_con_deriva=reporte["n_features_con_deriva_psi"],
+        contribucion_ponderada_features_con_deriva=contribucion_ponderada,
         se_recalibro=True,
         version_artefacto_nueva=artefacto_nuevo["version"],
         error=None,
