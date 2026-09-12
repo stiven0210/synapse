@@ -277,6 +277,62 @@ ventanas desde tráfico en vivo (ej. últimos N días vs. los N días
 anteriores) y programe la ejecución periódica (Task Scheduler / cron /
 job en la nube).
 
+### ✅ Bitácora de decisiones — completa (prerequisito del triage de Veto)
+
+Antes de evaluar si vale la pena un agente de triage sobre escalamientos de
+Veto (ver análisis en conversación), hacía falta cerrar un hueco real:
+`CicloDecision.decidir()` devuelve una `DecisionFinal` pero nada la
+persistía — no había sobre qué investigar un escalamiento después del
+hecho.
+
+`src/bitacora_decisiones.py` — registro append-only (JSON Lines) de cada
+decisión, con `clasificar_razon()` distinguiendo 4 tipos a partir del texto
+real que producen `veto.py`/`ciclo.py`:
+
+- `MODELO` — camino normal, no necesita triage.
+- `MONTO_EXCEDE_LIMITE` — invariante de negocio, autoexplicativo en el
+  propio dato (el monto), no necesita triage.
+- `SCORE_INVALIDO` y `ERROR_EJECUTOR` — **los únicos dos candidatos reales
+  a triage**: representan una falla de *sistema* (el modelo no pudo
+  producir una decisión), no un juicio sobre una transacción.
+
+Deliberadamente **no se invoca desde `CicloDecision.decidir()`** — el
+camino caliente está medido en microsegundos y no debe pagar I/O a disco
+en cada decisión; registrar es responsabilidad explícita de quien tiene el
+ciclo corriendo, mismo principio que la recarga del artefacto no es
+automática.
+
+**Acoplamiento documentado explícitamente**: `clasificar_razon()` distingue
+por el texto de `razon`, no por un campo estructurado en `DecisionFinal`
+(no se tocó `veto.py` — ya pasó 2 rondas de auditoría). Si el texto cambia,
+`test_clasificar_razon_cubre_los_textos_reales_de_veto_y_ciclo` (llama a
+`veto.evaluar()` de verdad, no copia los strings a mano) rompe en vez de
+misclasificar en silencio.
+
+**2 escenarios de causa real conocida** (`tests/test_bitacora_decisiones.py`),
+de punta a punta por el camino real (Ejecutor → Veto → CicloDecision →
+bitácora, sin monkeypatchear nada, a diferencia de `test_ciclo.py`):
+
+1. Transacción con una feature en `NaN` (dato corrupto aguas arriba) → el
+   Ejecutor no lanza excepción pero el score resultante es NaN → se
+   clasifica `SCORE_INVALIDO`.
+2. Transacción a la que le falta una feature que el artefacto vigente
+   espera (desajuste de esquema fuente-vs-artefacto) → `KeyError` dentro
+   del Ejecutor → `CicloDecision` lo captura → se clasifica `ERROR_EJECUTOR`.
+
+Estos 2 escenarios son la base para, más adelante, verificar si un agente
+de triage señala la causa correcta — ver el plan de pruebas de 3 niveles
+discutido en conversación (Nivel 1: guardrails deterministas con casos
+conocidos; Nivel 2: causas simuladas como estas; Nivel 3: valor real solo
+verificable con uso en producción, no offline).
+
+9 tests nuevos. Suite completa: 70 tests.
+
+**Pendiente, explícitamente fuera de este alcance**: el agente de triage en
+sí (LLM en capa lenta, con la misma disciplina de capas 1/2/3 del agente de an earlier project) no se ha construido — se decidió primero cerrar el
+prerequisito determinista y los escenarios de prueba, antes de comprometerse
+a la capa de LLM.
+
 ## Pendiente del plan de pruebas más amplio (no bloqueante)
 
 Quedan por construir, del plan de pruebas discutido en conversación: umbral

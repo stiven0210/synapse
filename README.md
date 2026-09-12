@@ -14,7 +14,8 @@ inventar algo sin precedentes.
 
 6 fases completas + auditoría post-implementación (12 hallazgos, 10
 corregidos) + detección de deriva + disparador de recalibración automática
-(deriva -> recalibración -> publicación -> recarga en vivo). **61 tests,
+(deriva -> recalibración -> publicación -> recarga en vivo) + bitácora de
+decisiones (prerequisito para triar escalamientos de Veto). **70 tests,
 todos en verde.**
 
 ## Las piezas
@@ -94,7 +95,8 @@ synapse/
 │   ├── veto.py
 │   ├── ciclo.py           # CicloDecision -- único punto de entrada real
 │   ├── deriva.py          # PSI + Kolmogorov-Smirnov
-│   └── disparador_recalibracion.py   # conecta deriva -> calibrador -> puente
+│   ├── disparador_recalibracion.py   # conecta deriva -> calibrador -> puente
+│   └── bitacora_decisiones.py        # registro de decisiones, base para triar Veto
 └── tests/
 ```
 
