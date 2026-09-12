@@ -31,8 +31,23 @@ Proyecto **independiente** — no comparte código con ningún proyecto anterior
   un número real (microsegundos), no una estimación.
 
 ## Stack
-Python 3.14. `scikit-learn` para el Calibrador (Fase 1). Sin dependencias
-de pago ni API keys — dataset público (ver `docs/PLAN_DE_TRABAJO.md`).
+Python 3.14. `scikit-learn` para el Calibrador (Fase 1). El dataset del
+Dominio 1 es público, sin credenciales. Única excepción: `src/agente_triage.py`
+(triage de escalamientos de Veto) usa `anthropic` + `ANTHROPIC_API_KEY` en
+el entorno — nunca hardcoded, y solo en el cliente real
+(`crear_cliente_claude()`); toda la lógica de auditoría se testea con un
+cliente inyectable, sin llamada real (ver `docs/ADR_003_agente_triage_veto.md`).
+
+## Principios (agentes LLM)
+- **Ningún LLM en el camino caliente.** `agente_triage.py` nunca se invoca
+  desde `CicloDecision.decidir()` — corre después, sobre entradas ya
+  escritas en `bitacora_decisiones.py`.
+- **Ningún LLM decide ni bloquea nada.** Su output es una hipótesis para
+  que un humano la verifique, nunca cambia estado del sistema.
+- **Misma disciplina de 3 capas que el agente de `an earlier project`**
+  (schema determinista, grounding determinista, auditor selectivo —
+  desacuerdo nunca se resuelve por mayoría), replicada como código nuevo:
+  SYNAPSE no comparte código con otros proyectos.
 
 ## Estructura
 Ver `README.md` para el árbol completo.

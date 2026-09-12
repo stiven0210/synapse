@@ -15,8 +15,9 @@ inventar algo sin precedentes.
 6 fases completas + auditoría post-implementación (12 hallazgos, 10
 corregidos) + detección de deriva + disparador de recalibración automática
 (deriva -> recalibración -> publicación -> recarga en vivo) + bitácora de
-decisiones (prerequisito para triar escalamientos de Veto). **70 tests,
-todos en verde.**
+decisiones + agente de triage de escalamientos de Veto (LLM en capa lenta,
+con grounding y auditor selectivo, nunca en el camino caliente). **90
+tests, todos en verde.**
 
 ## Las piezas
 
@@ -80,7 +81,8 @@ synapse/
 ├── docs/
 │   ├── PLAN_DE_TRABAJO.md          # empezar aquí -- estado, auditoría, resultados reales
 │   ├── ADR_001_artefacto_de_politica.md
-│   └── ADR_002_capa_de_veto.md
+│   ├── ADR_002_capa_de_veto.md
+│   └── ADR_003_agente_triage_veto.md
 ├── data/raw/creditcard.csv
 ├── scripts/
 │   ├── validacion_end_to_end.py
@@ -96,7 +98,9 @@ synapse/
 │   ├── ciclo.py           # CicloDecision -- único punto de entrada real
 │   ├── deriva.py          # PSI + Kolmogorov-Smirnov
 │   ├── disparador_recalibracion.py   # conecta deriva -> calibrador -> puente
-│   └── bitacora_decisiones.py        # registro de decisiones, base para triar Veto
+│   ├── bitacora_decisiones.py        # registro de decisiones, base para triar Veto
+│   ├── agente_triage.py              # LLM en capa lenta: hipótesis sobre escalamientos operativos
+│   └── limitador_llamadas.py         # rate limiting diario del agente de triage
 └── tests/
 ```
 

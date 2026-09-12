@@ -328,10 +328,48 @@ verificable con uso en producción, no offline).
 
 9 tests nuevos. Suite completa: 70 tests.
 
-**Pendiente, explícitamente fuera de este alcance**: el agente de triage en
-sí (LLM en capa lenta, con la misma disciplina de capas 1/2/3 del agente de an earlier project) no se ha construido — se decidió primero cerrar el
-prerequisito determinista y los escenarios de prueba, antes de comprometerse
-a la capa de LLM.
+### ✅ Agente de triage de escalamientos de Veto — completo
+
+`docs/ADR_003_agente_triage_veto.md` documenta la decisión completa.
+`src/agente_triage.py` implementa la misma disciplina de 3 capas del
+agente de an earlier project (código nuevo e independiente, no importado —
+`CLAUDE.md`): Capa 1 (schema determinista), Capa 2 (grounding determinista
+contra los datos reales de la entrada/contexto), Capa 3 (auditor selectivo,
+desacuerdo nunca se resuelve por mayoría). Nunca se invoca desde
+`CicloDecision.decidir()` — corre después, sobre entradas de tipo
+`SCORE_INVALIDO`/`ERROR_EJECUTOR` de la bitácora. Nunca decide ni bloquea
+nada, solo propone una hipótesis para que un humano la verifique.
+
+`src/limitador_llamadas.py` — rate limiting diario (mismo patrón que
+`an earlier project/src/agents/rate_limiter.py`, código independiente). `CircuitoTriage`
+(en `agente_triage.py`) — circuit breaker: si la tasa de descarte de los
+últimos N triages supera el umbral, el agente se apaga solo antes de gastar
+en una llamada más (`CircuitoAbierto`), el llamador cae al reporte plano
+determinista.
+
+**Validado según el plan de pruebas de 3 niveles:**
+- Nivel 1 (cliente LLM falso, sin llamadas reales): schema inválido se
+  descarta en Capa 1, grounding fallido dispara Capa 3, desacuerdo
+  proponente/auditor descarta sin resolver por mayoría, circuit breaker se
+  abre con tasa de descarte simulada y no gasta una llamada más una vez
+  abierto.
+- Nivel 2 (causa real conocida, reusando los 2 escenarios de
+  `test_bitacora_decisiones.py`): una hipótesis que cita el dato real
+  (`Amount` en NaN) pasa Capa 2 sin necesitar Capa 3; una hipótesis
+  alucinada (causa inventada, sin respaldo en los datos reales) falla
+  Capa 2, dispara Capa 3, y se descarta antes de llegar a un humano como
+  conclusión confiable.
+- Nivel 3 (valor real de uso): explícitamente sin validar — requiere
+  incidentes reales en producción, no un dataset histórico offline.
+
+20 tests nuevos (15 del agente + 5 del limitador). Suite completa: 90 tests.
+
+**Pendiente, explícitamente fuera de este alcance**: no existe todavía un
+job/script que conecte esto de punta a punta en producción (leer la
+bitácora real, filtrar escalamientos operativos, invocar el agente,
+mostrarle el resultado a un humano) — el foco de esta ronda fue la lógica
+del agente y su validación, no el cableado operativo. Tampoco se ha
+validado con `ANTHROPIC_API_KEY` real ni con incidentes reales (Nivel 3).
 
 ## Pendiente del plan de pruebas más amplio (no bloqueante)
 
