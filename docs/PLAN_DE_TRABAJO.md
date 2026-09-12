@@ -600,3 +600,82 @@ Fase 0), nunca compartir una misma instancia de `Ejecutor` entre hilos.
 Pendiente: dejar esta restricción explícita en `CLAUDE.md`/`ejecutor.py`
 (no se tocó código de producción en esta ronda, solo se investigó y se
 documenta el hallazgo).
+
+### ✅ Runner diario — el "despliegue real, aunque sea chico" — completo
+
+Sin tráfico real de producción, `src/runner.py::correr_ciclo_diario()`
+simula uno real: avanza por el dataset histórico en lotes (uno por
+invocación), con estado recursivo persistente entre corridas (igual que un
+servicio real que se reinicia todos los días). Primera corrida hace
+bootstrap (calibra con el primer `frac_bootstrap` del dataset, alimenta el
+estado recursivo con esa historia sin registrarla como decisión nueva);
+corridas siguientes retoman, evalúan deriva/recalibran
+(`disparador_recalibracion.py`) contra el lote anterior, y trían los
+escalamientos operativos nuevos si hay un agente configurado.
+
+`scripts/runner_diario.py` es el punto de entrada para Task Scheduler/cron
+(comandos de registro incluidos en su docstring). **Corrida real,
+verificada**: procesó 10,000 filas reales del dataset en 2 invocaciones
+manuales (índice 90,442 → 95,442 → 100,442 de ~284,807). Deliberadamente
+**no se programó** en Task Scheduler — el usuario decidió dejarlo como
+herramienta manual por ahora; programarlo es lo que le daría al Nivel 3 del
+agente de triage (¿de verdad ahorra esfuerzo humano?) datos reales que
+evaluar con el tiempo, pero eso implicaría un proceso corriendo sin
+supervisión y gastando presupuesto de LLM real si se configura
+`ANTHROPIC_API_KEY` en el entorno del sistema.
+
+11 tests nuevos (`tests/test_runner.py`).
+
+## Auditoría de los agentes (con ojos frescos, agente independiente)
+
+Con el runner y el agente de triage recién construidos, se pidió una
+auditoría adversarial de todo lo relacionado a agentes —
+`agente_triage.py`, `limitador_llamadas.py`, `bitacora_decisiones.py`,
+`runner.py`, y los 2 scripts de entrada — con la misma metodología que las
+auditorías anteriores (agente sin contexto de quien escribió el código).
+
+**Confirmado sólido**: ningún LLM es alcanzable desde `CicloDecision.decidir()`
+(verificado por grep, no solo lectura); Capa 1/Capa 2/Capa 3 corren
+exactamente cuando deben; el desacuerdo proponente/auditor nunca se
+resuelve por mayoría; la serialización del estado recursivo hace
+round-trip exacto; sin estado mutable compartido entre instancias.
+
+**5 hallazgos reales, los 5 corregidos:**
+
+1. **🔴 Crítico — un crash entre registrar una decisión y persistir el
+   nuevo índice del runner duplicaba filas en la bitácora.** Reproducido
+   de punta a punta antes de corregir: simulando la interrupción exacta,
+   la siguiente corrida reprocesaba y re-registraba la misma fila.
+   Corregido: el estado se guarda fila por fila (no una vez por lote), y
+   cada `registrar_decision()` lleva un `indice_fila` explícito — al
+   reanudar, si la fila que toca ya está en la bitácora (por un intento
+   interrumpido anterior), se vuelve a pasar por `decidir()` (continuidad
+   causal del estado recursivo) pero no se vuelve a registrar.
+2. **🟡 Capa 2 (grounding) aprobaba gratis una hipótesis sin evidencia
+   citada.** `evidencia_citada: []` devolvía "grounded" automáticamente —
+   invertía el incentivo (no citar nada era más seguro para una hipótesis
+   mala que citar algo verificable). Corregido: evidencia vacía ahora
+   cuenta como grounding fallido, fuerza Capa 3.
+3. **🟡 `leer_bitacora()` no toleraba una línea final truncada**, pese a
+   que su propio docstring decía que sí — una escritura interrumpida
+   (el mismo escenario del hallazgo 1) hacía que `json.loads`
+   reventara y **ninguna** entrada se pudiera leer. Corregido: cada línea
+   se parsea en su propio try/except, una corrupta se omite sin invalidar
+   el resto.
+4. **🟡 Solo se capturaban 2 tipos de excepción alrededor del triage**
+   (`CircuitoAbierto`, `PresupuestoAgotado`) — un error real de red/API
+   (timeout, 5xx) no capturado tumbaba todo el job, incluso después de que
+   ya se habían guardado decisiones y estado reales. Corregido en
+   `runner.py` y `scripts/triage_veto.py`: cualquier excepción del cliente
+   LLM durante el triage se cuenta como fallida y el job/reporte
+   continúa — el triage es asesor, nunca debe tumbar lo que ya funcionó.
+5. **🟡 El presupuesto diario del rate limiter vivía solo en memoria**,
+   pero los 2 puntos de entrada reales son procesos de un solo uso (por
+   diseño, para Task Scheduler: "una invocación = un día") — un reintento
+   manual el mismo día obtenía presupuesto fresco. Corregido:
+   `LimitadorLlamadasDiarias` acepta `ruta_estado` opcional y persiste
+   fecha/contador a disco entre procesos; ambos scripts de entrada ahora
+   lo usan, compartiendo el mismo presupuesto diario real.
+
+9 tests nuevos reproduciendo cada hallazgo antes de corregirlo. Suite
+completa: 132 tests.

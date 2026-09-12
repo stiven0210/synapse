@@ -102,6 +102,27 @@ def test_campo_faltante_se_descarta_en_capa1():
     assert resultado.detalle["capa_fallida"] == "capa1"
 
 
+def test_evidencia_citada_vacia_no_pasa_grounding_gratis():
+    # Hallazgo real de auditoría: una hipótesis sin evidencia citada no debe
+    # aprobarse a ciegas -- fuerza Capa 3 igual que una evidencia que no
+    # coincide con los datos reales.
+    llamadas = []
+    respuesta_sin_evidencia = _respuesta_valida(evidencia_citada=[])
+    cliente = _cliente_fake(
+        respuesta_sin_evidencia,
+        respuesta_auditor=json.dumps({"de_acuerdo": False, "razon": "no hay evidencia que respalde nada"}),
+        llamadas=llamadas,
+    )
+    agente = AgenteTriage(cliente_llm=cliente, rng=_RngFijo(0.99))  # sin muestreo aleatorio
+
+    resultado = agente.triar(ENTRADA, CONTEXTO)
+
+    assert resultado.detalle["paso_capa2_grounding"] is False
+    assert resultado.detalle["auditado_capa3"] is True
+    assert resultado.descartado is True
+    assert len(llamadas) == 2  # triage + auditor -- no pasó gratis
+
+
 def test_grounding_fallido_dispara_capa3_aunque_no_toque_muestreo():
     llamadas = []
     respuesta_desconectada = _respuesta_valida(

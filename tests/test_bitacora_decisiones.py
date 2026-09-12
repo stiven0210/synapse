@@ -53,6 +53,37 @@ def test_leer_bitacora_archivo_inexistente_devuelve_lista_vacia(tmp_path):
     assert leer_bitacora(tmp_path / "no_existe.jsonl") == []
 
 
+def test_registrar_decision_guarda_indice_fila_cuando_se_da(tmp_path):
+    ruta = tmp_path / "bitacora.jsonl"
+    registrar_decision(DecisionFinal(es_sospechosa=False, razon="modelo", score=0.1), {"Amount": 10.0}, ruta, indice_fila=42)
+
+    assert leer_bitacora(ruta)[0]["indice_fila"] == 42
+
+
+def test_registrar_decision_sin_indice_fila_queda_none(tmp_path):
+    ruta = tmp_path / "bitacora.jsonl"
+    registrar_decision(DecisionFinal(es_sospechosa=False, razon="modelo", score=0.1), {"Amount": 10.0}, ruta)
+
+    assert leer_bitacora(ruta)[0]["indice_fila"] is None
+
+
+def test_leer_bitacora_tolera_una_linea_final_truncada(tmp_path):
+    # Hallazgo real de auditoría: una escritura interrumpida a mitad de la
+    # última línea (ej. corte de luz, proceso matado a mitad de un write)
+    # no debe invalidar las entradas anteriores, que es justo lo que este
+    # módulo dice garantizar.
+    ruta = tmp_path / "bitacora.jsonl"
+    registrar_decision(DecisionFinal(es_sospechosa=False, razon="modelo", score=0.1), {"Amount": 1.0}, ruta)
+    registrar_decision(DecisionFinal(es_sospechosa=True, razon="modelo", score=0.9), {"Amount": 2.0}, ruta)
+    with ruta.open("a", encoding="utf-8") as f:
+        f.write('{"timestamp": "2026-01-01T00:00:00", "tipo": "modelo", "es_sosp')  # línea truncada, sin cerrar
+
+    entradas = leer_bitacora(ruta)
+
+    assert len(entradas) == 2  # las 2 completas se leen igual, la truncada se omite
+    assert [e["transaccion"]["Amount"] for e in entradas] == [1.0, 2.0]
+
+
 def test_clasificar_razon_mapea_los_4_tipos_conocidos():
     assert clasificar_razon("modelo") == TipoEscalamiento.MODELO
     assert clasificar_razon("|monto| 50000.0 excede el límite absoluto 10000.0") == TipoEscalamiento.MONTO_EXCEDE_LIMITE

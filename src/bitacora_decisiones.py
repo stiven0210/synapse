@@ -65,16 +65,25 @@ def clasificar_razon(razon: str) -> TipoEscalamiento:
     return TipoEscalamiento.MODELO
 
 
-def registrar_decision(decision: DecisionFinal, transaccion: dict, ruta: Path, timestamp: str | None = None) -> None:
+def registrar_decision(
+    decision: DecisionFinal, transaccion: dict, ruta: Path, timestamp: str | None = None, indice_fila: int | None = None
+) -> None:
     """Agrega una entrada a la bitácora (JSON Lines — cada escritura es una
     línea independiente, una entrada corrupta o una escritura interrumpida
     nunca invalida las entradas anteriores, a diferencia de reescribir un
-    único archivo JSON completo)."""
+    único archivo JSON completo -- ver `leer_bitacora()`).
+
+    `indice_fila` (posición absoluta de la transacción en su fuente, ej. el
+    índice del runner) es opcional pero, cuando el llamador la conoce,
+    es lo que permite detectar y evitar duplicados si una corrida se
+    interrumpe entre registrar la decisión y persistir hasta dónde se
+    procesó (ver `src/runner.py`, hallazgo real de auditoría)."""
     entrada = {
         "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
         "tipo": clasificar_razon(decision.razon).value,
         **asdict(decision),
         "transaccion": transaccion,
+        "indice_fila": indice_fila,
     }
     ruta.parent.mkdir(parents=True, exist_ok=True)
     with ruta.open("a", encoding="utf-8") as f:
@@ -82,10 +91,25 @@ def registrar_decision(decision: DecisionFinal, transaccion: dict, ruta: Path, t
 
 
 def leer_bitacora(ruta: Path) -> list[dict]:
+    """Tolera líneas corruptas o truncadas (ej. una escritura interrumpida a
+    mitad de la última línea -- hallazgo real de auditoría: antes,
+    `json.loads` reventaba en esa línea y ninguna entrada, ni las
+    anteriores válidas, se podía leer, contradiciendo la garantía que este
+    módulo documenta). Una línea que no parsea se omite, no invalida el
+    resto."""
     if not ruta.exists():
         return []
+    entradas = []
     with ruta.open("r", encoding="utf-8") as f:
-        return [json.loads(linea) for linea in f if linea.strip()]
+        for linea in f:
+            linea = linea.strip()
+            if not linea:
+                continue
+            try:
+                entradas.append(json.loads(linea))
+            except json.JSONDecodeError:
+                continue
+    return entradas
 
 
 def filtrar_escalamientos_operativos(entradas: list[dict]) -> list[dict]:

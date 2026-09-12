@@ -40,9 +40,11 @@ agente de triage de escalamientos de Veto (LLM en capa lenta, con
 grounding y auditor selectivo, nunca en el camino caliente) + validación
 cruzada walk-forward multi-fold + umbral de decisión por costo esperado
 (análisis, no reemplaza producción) + monitoreo de deriva del score de
-salida (complementa la deriva por feature). Agente de triage validado con
-`ANTHROPIC_API_KEY` real (2 bugs de integración encontrados y corregidos).
-**118 tests, todos en verde.**
+salida (complementa la deriva por feature) + runner diario (despliegue
+real sobre el dataset histórico, con estado persistente). Agente de triage
+validado con `ANTHROPIC_API_KEY` real (2 bugs de integración encontrados y
+corregidos) y con una auditoría adversarial independiente (5 hallazgos
+reales, los 5 corregidos). **132 tests, todos en verde.**
 
 ## Las piezas
 
@@ -113,7 +115,8 @@ synapse/
 │   ├── validacion_end_to_end.py
 │   ├── deteccion_deriva.py
 │   ├── recalibracion_automatica.py   # disparador de recalibración, end-to-end
-│   └── triage_veto.py                # bitácora -> agente de triage -> reporte para un humano
+│   ├── triage_veto.py                # bitácora -> agente de triage -> reporte para un humano
+│   └── runner_diario.py              # punto de entrada para Task Scheduler/cron -- un "día" real
 ├── src/
 │   ├── artefacto.py       # contrato compartido (validación ADR_001) + calcular_scores() batch
 │   ├── calibrador.py
@@ -128,7 +131,8 @@ synapse/
 │   ├── agente_triage.py              # LLM en capa lenta: hipótesis sobre escalamientos operativos
 │   ├── limitador_llamadas.py         # rate limiting diario del agente de triage
 │   ├── validacion_cruzada.py         # walk-forward multi-fold, diagnóstico de estabilidad
-│   └── costo_decision.py             # umbral por costo esperado, análisis -- no reemplaza producción
+│   ├── costo_decision.py             # umbral por costo esperado, análisis -- no reemplaza producción
+│   └── runner.py                     # bootstrap + estado persistente + deriva/triage por lote
 └── tests/
 ```
 
@@ -136,7 +140,7 @@ synapse/
 
 ```bash
 pip install -r requirements.txt
-pytest tests/ -q                              # 57 tests
+pytest tests/ -q                              # 132 tests
 python scripts/validacion_end_to_end.py       # métricas + latencia reales
 python scripts/deteccion_deriva.py            # reporte de deriva real
 ```

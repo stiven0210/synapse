@@ -28,6 +28,7 @@ RUTA_ARTEFACTO = RAIZ / "data" / "artefacto_politica.json"
 RUTA_BITACORA = RAIZ / "data" / "bitacora_decisiones.jsonl"
 RUTA_REPORTE_DERIVA = RAIZ / "data" / "reporte_deriva.json"
 RUTA_REPORTE_TRIAGE = RAIZ / "data" / "reporte_triage_veto.json"
+RUTA_ESTADO_LIMITADOR = RAIZ / "data" / "estado_limitador_triage.json"
 
 ARTEFACTO_DEMO = {
     "version": 1,
@@ -87,7 +88,9 @@ def main() -> None:
 
     from src.agente_triage import crear_cliente_claude
 
-    cliente = LimitadorLlamadasDiarias(cliente_llm=crear_cliente_claude(), max_llamadas_por_dia=50)
+    cliente = LimitadorLlamadasDiarias(
+        cliente_llm=crear_cliente_claude(), max_llamadas_por_dia=50, ruta_estado=RUTA_ESTADO_LIMITADOR,
+    )
     agente = AgenteTriage(cliente_llm=cliente)
     contexto = _armar_contexto()
 
@@ -98,6 +101,13 @@ def main() -> None:
         except (CircuitoAbierto, PresupuestoAgotado) as e:
             print(f"  Sin triage ({type(e).__name__}): {e} -- cayendo al reporte plano.")
             reporte["resultados"].append({"entrada": entrada, "triage": None, "motivo_sin_triage": str(e)})
+            continue
+        except Exception as e:
+            # Hallazgo de auditoría: un error real de red/API (timeout, 5xx) no
+            # debe tumbar el script completo -- el triage es asesor, el resto
+            # de escalamientos y el reporte ya generado deben seguir su curso.
+            print(f"  Sin triage (error del cliente LLM: {type(e).__name__}): {e} -- cayendo al reporte plano.")
+            reporte["resultados"].append({"entrada": entrada, "triage": None, "motivo_sin_triage": f"{type(e).__name__}: {e}"})
             continue
 
         if resultado.descartado:

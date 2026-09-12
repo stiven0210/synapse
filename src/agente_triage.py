@@ -174,10 +174,19 @@ def _capa2_grounding(resultado: ResultadoLLM, entrada: dict, contexto: dict) -> 
 
     Umbral de longitud de palabra en 3 (no 4 como en an earlier project): acá el
     vocabulario verificable son tokens técnicos cortos (nombres de feature
-    como "V14", "NaN"), no prosa en inglés."""
+    como "V14", "NaN"), no prosa en inglés.
+
+    **Corrección de un hallazgo real de auditoría**: `evidencia_citada`
+    vacía devolvía `True` ("nada que groundear") -- pero Capa 1 solo exige
+    que sea una lista, no que tenga contenido, así que una hipótesis que no
+    cita ninguna evidencia pasaba Capa 2 gratis, sin necesitar Capa 3.
+    Invierte el incentivo que Capa 2 existe para dar: no citar nada quedaba
+    más seguro para una hipótesis mala que citar algo verificable. Sin
+    evidencia citada, no hay nada que confirme la hipótesis -- se trata
+    como grounding fallido, fuerza Capa 3."""
     afirmaciones = resultado.evidencia_citada
     if not afirmaciones:
-        return True  # nada que groundear
+        return False
 
     datos_reales = json.dumps({"entrada": entrada, "contexto": contexto}, ensure_ascii=False).lower()
     coincidencias = 0
