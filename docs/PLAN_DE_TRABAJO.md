@@ -392,11 +392,44 @@ y `PresupuestoAgotado` se manejan igual si ocurren con un cliente real
 configurado: se cae al reporte plano para esa entrada, nunca se detiene el
 job completo.
 
-**Pendiente, explícitamente fuera de este alcance**: no se ha corrido con
-`ANTHROPIC_API_KEY` real (sin esa clave no hay forma de validar el cliente
-real ni el Nivel 3 — valor con incidentes reales). Tampoco existe todavía
-una fuente de tráfico de producción real que alimente la bitácora — hoy
-solo el job de ejemplo la alimenta con los 2 escenarios conocidos.
+**Actualización: probado con `ANTHROPIC_API_KEY` real — 2 bugs reales
+encontrados y corregidos, ninguno detectable con el cliente falso de los
+tests.**
+
+1. **`crear_cliente_claude()` asumía `respuesta.content[0]` como texto.**
+   El modelo puede devolver primero un bloque de razonamiento extendido
+   (`ThinkingBlock`), y `.content[0].text` lanzaba `AttributeError`.
+   Corregido: se buscan explícitamente los bloques de tipo `"text"` entre
+   todo `respuesta.content`, sin asumir posición.
+2. **El modelo envuelve el JSON en un bloque de código markdown**
+   (` ```json ... ``` `) pese a que el prompt pide "Responde SOLO en
+   JSON" — comportamiento común de LLMs, no un error del modelo.
+   `_capa1_validar_schema` lanzaba `FalloCapa1` con
+   `"Expecting value: line 1 column 1"` (JSON vacío tras el fence sin
+   despojar). Corregido con `_despojar_bloque_markdown()`.
+
+4 tests nuevos reproduciendo ambos casos con un cliente Anthropic
+simulado (sin llamada de red real). Suite completa: 110 tests.
+
+**Resultado real, de punta a punta, con Claude real** (los mismos 2
+escenarios de causa conocida): ambas hipótesis correctas y bien fundamentadas,
+pasando Capa 2 sin necesitar Capa 3 —
+- `SCORE_INVALIDO` (Amount en NaN): *"El valor de Amount llegó como NaN...
+  No hay evidencia en el contexto de que esto se deba a deriva de
+  distribución"* — severidad media, `investigar_pipeline_datos`, confianza 0.55.
+- `ERROR_EJECUTOR` (Amount faltante): *"El ejecutor falló porque el objeto
+  'transaccion' no contiene el campo 'Amount'... probablemente causó un
+  KeyError"* — severidad alta, `verificar_esquema_transaccion`, confianza 0.75.
+
+Esto cierra la validación de Nivel 2 con un LLM real (antes solo probado
+con cliente falso) — la calidad y el grounding de las hipótesis son
+correctos en este caso concreto.
+
+**Pendiente, explícitamente fuera de este alcance**: no existe todavía una
+fuente de tráfico de producción real que alimente la bitácora — hoy solo
+el job de ejemplo la alimenta con los 2 escenarios conocidos. El Nivel 3
+(¿esto reduce de verdad el esfuerzo de un humano?) sigue sin poder
+validarse sin incidentes reales en producción.
 
 ### ✅ Deriva ponderada por magnitud de coeficiente — completo
 

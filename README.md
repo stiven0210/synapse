@@ -19,7 +19,9 @@ recalibración -> publicación -> recarga en vivo) + bitácora de decisiones +
 agente de triage de escalamientos de Veto (LLM en capa lenta, con
 grounding y auditor selectivo, nunca en el camino caliente) + validación
 cruzada walk-forward multi-fold + umbral de decisión por costo esperado
-(análisis, no reemplaza producción). **106 tests, todos en verde.**
+(análisis, no reemplaza producción). Agente de triage validado con
+`ANTHROPIC_API_KEY` real (2 bugs de integración encontrados y corregidos).
+**110 tests, todos en verde.**
 
 ## Las piezas
 

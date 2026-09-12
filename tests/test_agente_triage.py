@@ -1,8 +1,10 @@
 import json
+import sys
+from unittest.mock import MagicMock
 
 import pytest
 
-from src.agente_triage import AgenteTriage, CircuitoAbierto, CircuitoTriage
+from src.agente_triage import AgenteTriage, CircuitoAbierto, CircuitoTriage, crear_cliente_claude
 
 
 class _RngFijo:
@@ -159,6 +161,27 @@ def test_respuesta_del_auditor_no_json_se_trata_como_desacuerdo():
     assert resultado.detalle["capa_fallida"] == "capa3"
 
 
+def test_respuesta_envuelta_en_bloque_markdown_json_se_parsea_igual():
+    # Hallazgo real: pese a "Responde SOLO en JSON", el modelo puede envolver
+    # la respuesta en ```json ... ``` -- debe parsearse igual, no descartarse.
+    respuesta_con_fence = "```json\n" + _respuesta_valida() + "\n```"
+    agente = AgenteTriage(cliente_llm=_cliente_fake(respuesta_con_fence), rng=_RngFijo(0.99))
+
+    resultado = agente.triar(ENTRADA, CONTEXTO)
+
+    assert resultado.descartado is False
+    assert resultado.severidad == "media"
+
+
+def test_respuesta_envuelta_en_bloque_markdown_generico_tambien_se_parsea():
+    respuesta_con_fence = "```\n" + _respuesta_valida() + "\n```"
+    agente = AgenteTriage(cliente_llm=_cliente_fake(respuesta_con_fence), rng=_RngFijo(0.99))
+
+    resultado = agente.triar(ENTRADA, CONTEXTO)
+
+    assert resultado.descartado is False
+
+
 def test_sin_cliente_llm_configurado_lanza_error():
     agente = AgenteTriage()
     with pytest.raises(ValueError):
@@ -239,3 +262,37 @@ def test_hipotesis_alucinada_sin_respaldo_en_datos_reales_se_descarta():
     assert resultado.detalle["paso_capa2_grounding"] is False
     assert resultado.descartado is True
     assert resultado.hipotesis is None
+
+
+# --- crear_cliente_claude: hallazgo real probado con ANTHROPIC_API_KEY real -------
+# `anthropic.Anthropic()` se simula (sin llamada de red real ni costo) para
+# reproducir exactamente la forma de respuesta que causó el bug real: un
+# bloque de razonamiento extendido (ThinkingBlock) antes del bloque de texto.
+
+def _mockear_anthropic(monkeypatch, bloques_respuesta):
+    respuesta_fake = MagicMock(content=bloques_respuesta)
+    cliente_fake = MagicMock()
+    cliente_fake.messages.create.return_value = respuesta_fake
+    modulo_anthropic_fake = MagicMock()
+    modulo_anthropic_fake.Anthropic.return_value = cliente_fake
+    monkeypatch.setitem(sys.modules, "anthropic", modulo_anthropic_fake)
+
+
+def test_crear_cliente_claude_ignora_bloques_de_pensamiento_y_extrae_el_texto(monkeypatch):
+    bloque_pensamiento = MagicMock(type="thinking")
+    bloque_texto = MagicMock(type="text", text='{"hipotesis": "ok"}')
+    _mockear_anthropic(monkeypatch, [bloque_pensamiento, bloque_texto])
+
+    llamar = crear_cliente_claude()
+
+    assert llamar("prompt de prueba") == '{"hipotesis": "ok"}'
+
+
+def test_crear_cliente_claude_sin_ningun_bloque_de_texto_lanza_error_explicito(monkeypatch):
+    bloque_pensamiento = MagicMock(type="thinking")
+    _mockear_anthropic(monkeypatch, [bloque_pensamiento])
+
+    llamar = crear_cliente_claude()
+
+    with pytest.raises(ValueError, match="ningún bloque de texto"):
+        llamar("prompt de prueba")

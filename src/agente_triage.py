@@ -115,11 +115,26 @@ class CircuitoTriage:
         return (sum(self._historial) / len(self._historial)) >= self.umbral_tasa_descarte
 
 
+def _despojar_bloque_markdown(texto: str) -> str:
+    """Hallazgo real (probado con ANTHROPIC_API_KEY real): pese a que el
+    prompt pide "SOLO JSON", el modelo puede envolver la respuesta en un
+    bloque de código markdown (```json ... ```) -- comportamiento común de
+    LLMs, no un error del modelo. Se despoja antes de parsear, sin intentar
+    interpretar nada más allá de eso."""
+    texto = texto.strip()
+    if texto.startswith("```"):
+        primer_salto = texto.find("\n")
+        if primer_salto != -1:
+            texto = texto[primer_salto + 1:]
+        texto = texto.removesuffix("```").strip()
+    return texto
+
+
 def _capa1_validar_schema(texto_respuesta: str) -> ResultadoLLM:
     """Chequeo determinista sobre el 100% de las respuestas: JSON bien
     formado, campos presentes, enums y rangos válidos. Costo cero, sin LLM."""
     try:
-        data = json.loads(texto_respuesta)
+        data = json.loads(_despojar_bloque_markdown(texto_respuesta))
     except json.JSONDecodeError as e:
         raise FalloCapa1(f"JSON inválido: {e}") from e
 
@@ -266,9 +281,18 @@ def crear_cliente_claude(modelo: str = "claude-sonnet-5") -> Callable[[str], str
     cliente = anthropic.Anthropic()
 
     def llamar(prompt: str) -> str:
+        """Hallazgo real (probado con ANTHROPIC_API_KEY real, no solo con el
+        cliente falso de los tests): `respuesta.content[0]` no siempre es
+        texto -- el modelo puede devolver primero un bloque de razonamiento
+        extendido (`ThinkingBlock`), y `.content[0].text` revienta con
+        `AttributeError`. Se busca explícitamente el/los bloques de tipo
+        "text" en vez de asumir la posición."""
         respuesta = cliente.messages.create(
             model=modelo, max_tokens=1024, messages=[{"role": "user", "content": prompt}]
         )
-        return respuesta.content[0].text
+        bloques_texto = [bloque.text for bloque in respuesta.content if bloque.type == "text"]
+        if not bloques_texto:
+            raise ValueError(f"la respuesta del modelo no tiene ningún bloque de texto: {respuesta.content!r}")
+        return "".join(bloques_texto)
 
     return llamar
