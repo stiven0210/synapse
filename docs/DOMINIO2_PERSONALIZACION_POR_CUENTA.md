@@ -552,3 +552,31 @@ correcta y no cambia con esto.**
    curva de la sección 9, no un reemplazo.
 
 Reporte completo (con ambos intentos) en `data/reporte_sld_prior_shift.json`.
+
+## 12. Benchmark contra datasets reales (IEEE-CIS, ULB) y deriva de concepto (2026-09-13)
+
+Motivado por evaluar honestamente si el enfoque "compite con el mercado" en
+detección, no solo en latencia (que sí está confirmado, sección 6).
+
+**Benchmark en ULB `creditcard.csv` (real, Europa):** misma disciplina
+metodológica (split temporal, Gradient Boosting, grid de hiperparámetros)
+aplicada a los datos reales de esta dataset (no a Sparkov). Resultado:
+AUC-ROC 0.982, AUC-PR 0.780 (split temporal) / 0.817 (split aleatorio,
+igualando la metodología típica de notebooks públicos). **Por debajo** del
+mejor resultado publicado conocido (XGBoost afinado, AUC-PR 0.9133) — ni
+ajustando hiperparámetros (grid de 12) ni igualando el split cerramos esa
+brecha. Reportes en `data/reporte_benchmark_ulb*.json`.
+
+**Conclusión honesta:** en detección, **no superamos el estado del arte
+publicado** en datos reales — somos competitivos, no superiores. La ventaja
+real y confirmada sigue siendo la latencia (sección 6), no la detección.
+
+**Deriva de concepto (Sparkov, dentro del propio tramo de test 2023-2026):**
+AUC-PR por año calendario: 2024→0.971, 2025→0.922, 2026(parcial)→0.892 —
+**caída consistente y monótona**, mientras AUC-ROC se mantiene ~1.0 en los
+tres (confirma otra vez que AUC-ROC esconde el deterioro, igual que en la
+sección 4). Con ~4 puntos de AUC-PR de caída por año, **reentrenar al menos
+anualmente sería razonable** en un despliegue real — aunque con solo 35-106
+fraudes por año la pendiente exacta tiene incertidumbre estadística real, la
+dirección (siempre bajando) es consistente en los 3 períodos, no un
+accidente de un corte. Reporte en `data/reporte_concept_drift_sparkov.json`.
