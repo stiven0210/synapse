@@ -943,3 +943,43 @@ artefacto absorbió el cambio de 5 a 6 dimensiones sin romper nada).
 
 **No se tocó Dominio 1.** No se hizo commit ni deploy — queda a decisión
 del usuario. SYNAPSE sigue en fase de pruebas.
+
+## 17. Ablation: ¿hay redundancia entre las 2 features de categoría? (2026-09-14)
+
+Pregunta directa tras llevar `frecuencia_categoria_expandida` (global) a
+producción junto a `huella_categoria_cuenta` (por cuenta, ya existente):
+¿se pisan entre sí, o aportan señal genuinamente distinta? Ablation de 4
+sets de features, misma metodología de comparación que las secciones
+14-16 (walk-forward 5-fold, `frac_train_inicial=0.5`, configuración ganadora
+del Paso 4, isotónica en VAL, AUC-PR sobre scores calibrados):
+
+| Set | AUC-PR por fold | Media | Desviación |
+|---|---|---|---|
+| **6 features (baseline producción)** | 0.907, 0.923, 0.976, 0.958, 0.970 | **0.947** | ±0.027 |
+| Sin `huella_categoria_cuenta` (5, solo la global) | 0.438, 0.332, 0.395, 0.454, 0.606 | **0.445** | ±0.091 |
+| Sin `frecuencia_categoria_expandida` (5, versión anterior) | 0.877, 0.879, 0.931, 0.935, 0.947 | **0.914** | ±0.030 |
+| Solo `amt` + las 2 de categoría (3) | 0.833, 0.857, 0.838, 0.827, 0.895 | **0.850** | ±0.025 |
+
+**Veredicto honesto: NO hay redundancia — al contrario, las dos features
+de categoría son asimétricamente importantes, y ambas aportan señal real.**
+
+- **Quitar `huella_categoria_cuenta` es catastrófico**: el modelo se
+  derrumba de 0.947 a **0.445** (más que a la mitad) y la desviación entre
+  folds se triplica (±0.091) — es, por lejos, la feature que más carga el
+  modelo, consistente con la importancia de permutación ya medida en la
+  sección 7 (0.945, la más alta de todas).
+- **Quitar `frecuencia_categoria_expandida` cuesta mucho menos**: cae de
+  0.947 a 0.914 (-0.033) — real, pero no comparable en magnitud a quitar la
+  huella. Es un complemento genuino, no decorativo, pero no es la columna
+  vertebral del modelo.
+- **Las otras 3 features (`hora`, `conteo_ventana_global`,
+  `monto_ewma_cuenta`) también aportan de forma real**: con solo `amt` +
+  las 2 de categoría (3 features), el modelo cae a 0.850 — 0.097 por debajo
+  del set completo. No son prescindibles pese a tener importancia
+  individual modesta (mismo patrón ya visto en el ablation de la sección 7:
+  "Set C" con solo 2 features caía de forma parecida).
+
+**Conclusión:** las 6 features de producción se quedan como están — cada
+una aporta señal real y verificada, ninguna es redundante con otra al
+punto de justificar sacarla. `huella_categoria_cuenta` es, con mucha
+diferencia, la feature más crítica de todo Dominio 2.
