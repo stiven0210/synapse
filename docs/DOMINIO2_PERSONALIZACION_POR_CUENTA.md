@@ -983,3 +983,42 @@ de categoría son asimétricamente importantes, y ambas aportan señal real.**
 una aporta señal real y verificada, ninguna es redundante con otra al
 punto de justificar sacarla. `huella_categoria_cuenta` es, con mucha
 diferencia, la feature más crítica de todo Dominio 2.
+
+## 18. Columnas demográficas nunca probadas — no disponibles, no un resultado negativo real
+
+Pendiente #2 de la lista de pruebas adicionales: probar edad/género/ocupación/
+ciudad del cliente como features nuevas, candidatas típicas del generador
+`Sparkov_Data_Generation` que nunca se usaron en el modelo.
+
+**Hallazgo real antes de poder probar nada:** `data/raw/sparkov_2013_2026.csv`
+**no tiene esas columnas**. Sus 11 columnas reales son: `cc_num`, `lat`,
+`long`, `trans_date`, `trans_time`, `unix_time`, `category`, `amt`,
+`is_fraud`, `merch_lat`, `merch_long` — verificado leyendo el CSV
+directamente, no supuesto. La sección 1 del doc ya lo explicaba: el dataset
+fue "combinado y reducido a las columnas útiles (61 archivos crudos → 1
+CSV)" — género, fecha de nacimiento, ocupación y ciudad/estado se
+descartaron en ese paso de combinación, nunca llegaron al CSV que usa el
+proyecto.
+
+**Se buscó si quedaba algún archivo de generación original con esos datos**
+(`/tmp/sparkov_gen`, la instalación del generador usada en su momento):
+existen `datagen_customer.py`, `profiles/` (perfiles demográficos genéricos
+del generador, no de las 99 cuentas reales) y `demographics.csv` (tabla de
+referencia poblacional de EE.UU., tampoco específica de las cuentas), pero
+**no hay un `customers.csv` de la corrida real que generó las 99 cuentas**
+de `sparkov_2013_2026.csv` — solo quedó guardado el CSV de transacciones ya
+combinado y reducido. Recuperar esos datos requeriría **regenerar el
+dataset completo desde cero** con `Sparkov_Data_Generation`, el mismo
+obstáculo ya documentado en la sección 10 (un test de solo 2 clientes × 10
+días tardó >13 minutos sin terminar en esta máquina — regenerar 100
+clientes × 13 años no es viable aquí).
+
+**Veredicto honesto: esta prueba queda cerrada por falta de datos, no por
+un resultado negativo del modelo.** No es "se probó y no ayudó" (como la
+sección 15.2) — es "no se pudo probar porque el dato ya no existe en el
+dataset que tenemos". Si en algún momento se regenera Sparkov desde cero
+guardando también el archivo de clientes, esta prueba queda pendiente de
+verdad para retomar. Con los datos actuales, el dataset de transacciones
+está agotado en cuanto a columnas explorables — las 6 features de
+producción son todo lo que da de sí `sparkov_2013_2026.csv` tal como existe
+hoy.
