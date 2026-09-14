@@ -41,9 +41,11 @@ FEATURES_ARBOLES = [
 ]
 COLUMNAS_CRUDAS_REQUERIDAS = {"cc_num", "amt", "unix_time", "category", "is_fraud"}
 
-# Configuración ganadora del Paso 4 del afinamiento (docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md).
+# Configuración ganadora del Paso 4 del afinamiento (docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md),
+# actualizada en la sección 21: learning_rate 0.05 -> 0.1 (validado con 5-fold walk-forward,
+# AUC-PR 0.947+-0.027 -> 0.957+-0.024, mejora real de +0.0098, mejor o empatado en 4 de 5 folds).
 MAX_DEPTH = 3
-LEARNING_RATE = 0.05
+LEARNING_RATE = 0.1
 MAX_ITER = 200
 RANDOM_STATE = 42
 

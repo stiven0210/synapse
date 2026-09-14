@@ -944,6 +944,27 @@ artefacto absorbió el cambio de 5 a 6 dimensiones sin romper nada).
 **No se tocó Dominio 1.** No se hizo commit ni deploy — queda a decisión
 del usuario. SYNAPSE sigue en fase de pruebas.
 
+**Actualización (2026-09-14, después de la sección 21):** `LEARNING_RATE`
+cambió de `0.05` a `0.1` en `src/calibrador_arboles.py`, implementando la
+recomendación de la sección 21. Reentrenado y reverificado bit a bit
+(19 tests de Dominio 2 + 186 totales, todos en verde). Cifras reales
+actualizadas del split único 60/20/20:
+
+| | VAL (antes / ahora) | TEST (antes / ahora) |
+|---|---|---|
+| Precisión | 88.7% / **94.3%** | 87.8% / **90.3%** |
+| Recall | 81.8% / 85.7% | 83.0% / 84.0% |
+| F1 | 0.851 / 0.898 | 0.853 / 0.871 |
+| AUC-PR | 0.898 / **0.951** | 0.901 / **0.926** |
+
+Mejora consistente en las dos métricas y los dos splits, no solo en el
+5-fold de la sección 21. Tabla de búsqueda: 11,147,136 → **16,189,440**
+combinaciones (`[39, 11, 2, 31, 16, 30]` umbrales por feature, más grande
+por los umbrales nuevos que aprenden los árboles con `learning_rate=0.1`)
+— sigue exacta por construcción, verificado de nuevo bit a bit. La primera
+corrida de esta actualización se hizo directamente (no vía subagente) por
+límite semanal de cuota de API alcanzado durante la sesión.
+
 ## 17. Ablation: ¿hay redundancia entre las 2 features de categoría? (2026-09-14)
 
 Pregunta directa tras llevar `frecuencia_categoria_expandida` (global) a
@@ -1197,12 +1218,14 @@ mejora dramática como la de `frecuencia_categoria_expandida` (+0.033,
 sección 16), pero es consistente y no parece ruido.
 
 **Recomendación:** vale la pena cambiar `LEARNING_RATE` de `0.05` a `0.1`
-en `src/calibrador_arboles.py` en una próxima sesión, si el usuario decide
-avanzar — implica reentrenar, reconstruir la tabla de búsqueda (con el
-nuevo modelo, los umbrales reales de los árboles cambian) y revalidar
-exactitud bit a bit, igual disciplina que cualquier cambio de producción
-de este proyecto. **No implementado en esta pasada** por alcance (esta
-prueba era solo de diagnóstico).
+en `src/calibrador_arboles.py` — implica reentrenar, reconstruir la tabla
+de búsqueda (con el nuevo modelo, los umbrales reales de los árboles
+cambian) y revalidar exactitud bit a bit, igual disciplina que cualquier
+cambio de producción de este proyecto.
+
+**Implementado el mismo día**, ver la actualización al final de la
+sección 16 (cifras reales con `learning_rate=0.1`, tabla reconstruida y
+reverificada bit a bit, 186 tests en verde).
 
 ## Cierre de la ronda de 5 pruebas adicionales (2026-09-14)
 
@@ -1225,14 +1248,17 @@ cerrar la integración de `frecuencia_categoria_expandida` (sección 16):
    limitación de diseño inherente a la personalización por comportamiento,
    documentada, no "corregida".
 5. **Búsqueda de hiperparámetros con 6 features** (esta sección): mejora
-   real pero modesta (+0.0098 AUC-PR) cambiando `learning_rate` de 0.05 a
-   0.1 — recomendación pendiente de decisión, no implementada.
+   real (+0.0098 AUC-PR en 5-fold, y confirmada también en el split único:
+   AUC-PR VAL 0.898→0.951, TEST 0.901→0.926) cambiando `learning_rate` de
+   0.05 a 0.1 — **implementado el mismo día**, ver actualización al final
+   de la sección 16.
 
 **Estado general de Dominio 2 después de esta ronda:** el modelo en
-producción (`src/calibrador_arboles.py` y módulos asociados) sigue
-siendo el mismo que se cerró en la sección 16 — ninguna de las 5 pruebas
-modificó `src/`, todas fueron diagnóstico puro. Quedan 3 recomendaciones
-explícitas sin implementar, a decisión del usuario: excluir la feature
-nueva del monitoreo de deriva (#3), cambiar `learning_rate` a 0.1 (#5), y
-la idea de mitigación adversarial mencionada en la sección 20 (#4, más
-especulativa). Los 186 tests de producción siguen en verde.
+producción cambió una vez respecto a lo que cerró la sección 16 —
+`learning_rate=0.1` en vez de `0.05` (hallazgo #5, implementado y
+reverificado bit a bit). Las otras 4 pruebas fueron diagnóstico puro, sin
+tocar `src/`. Quedan 2 recomendaciones explícitas sin implementar, a
+decisión del usuario: excluir `frecuencia_categoria_expandida` del
+monitoreo de deriva (#3), y la idea de mitigación adversarial mencionada
+en la sección 20 (#4, más especulativa, sin diseño concreto todavía). Los
+186 tests de producción siguen en verde.
