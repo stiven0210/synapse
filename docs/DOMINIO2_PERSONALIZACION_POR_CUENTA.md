@@ -1149,3 +1149,90 @@ como resuelta. Mitigación posible para el futuro, no implementada:
 una feature que mida "qué tan perfecta/típica es la elección de categoría"
 en sí misma (una elección *demasiado* óptima podría ser, paradójicamente,
 una señal secundaria de manipulación) — idea, no una solución probada.
+
+## 21. Búsqueda de hiperparámetros rehecha con las 6 features (2026-09-14)
+
+Cierra la última de las 5 pruebas de esta ronda. El "Paso 4" original del
+afinamiento (grid de 12 combinaciones, `max_depth` ∈ {3,5,8},
+`learning_rate` ∈ {0.05,0.1}, `max_iter` ∈ {200,300}, sobre 3 folds) se
+había corrido con las 5 features de entonces, antes de agregar
+`frecuencia_categoria_expandida` (sección 16). Se repitió con las 6
+features actuales de producción.
+
+**Nota de método:** el primer intento reventó por falta de memoria real —
+la máquina tiene solo 5.9GB de RAM total, y `calibrar()` construye también
+la tabla de búsqueda completa (innecesaria para solo comparar AUC-PR;
+con `max_depth` alto puede crecer a decenas de millones de combinaciones).
+Se rehizo entrenando y midiendo AUC-PR directamente, sin construir la
+tabla, con limpieza explícita de memoria entre combinaciones.
+
+**Grid de 12 combinaciones (3-fold, igual metodología que el Paso 4 original):**
+
+| Configuración | AUC-PR (3-fold) |
+|---|---|
+| **`max_depth=3, lr=0.1, max_iter=200`** | **0.9479 ± 0.0223** |
+| `max_depth=3, lr=0.05, max_iter=300` | 0.9459 ± 0.0263 |
+| `max_depth=3, lr=0.1, max_iter=300` | 0.9464 ± 0.0207 |
+| `max_depth=3, lr=0.05, max_iter=200` (config actual de producción) | 0.9430 ± 0.0234 |
+| `max_depth=5` (las 4 combinaciones) | 0.9169 – 0.9204 |
+| `max_depth=8` (las 4 combinaciones) | 0.8491 – 0.8768, mucho más inestable |
+
+`max_depth=8` confirma el mismo patrón que ya se vio con 5 features
+(Paso 4 original): sobreajusta y es inestable con solo 99 cuentas
+(desviación hasta ±0.085). `max_depth=3` sigue siendo, por lejos, la
+mejor familia.
+
+**Validación del candidato ganador (`max_depth=3, lr=0.1, max_iter=200`)
+con el 5-fold completo** (`frac_train_inicial=0.5`, mismo estándar de las
+secciones 14-20):
+
+| | AUC-PR por fold | Media | Desviación |
+|---|---|---|---|
+| Config actual (`lr=0.05`) | 0.907, 0.923, 0.976, 0.958, 0.970 | 0.947 | ±0.027 |
+| **Candidato (`lr=0.1`)** | 0.914, 0.957, 0.976, 0.955, 0.983 | **0.957** | ±0.024 |
+
+**Mejora real de +0.0098**, mejor o prácticamente empatado en 4 de 5
+folds (nunca claramente peor), con desviación levemente menor. No es una
+mejora dramática como la de `frecuencia_categoria_expandida` (+0.033,
+sección 16), pero es consistente y no parece ruido.
+
+**Recomendación:** vale la pena cambiar `LEARNING_RATE` de `0.05` a `0.1`
+en `src/calibrador_arboles.py` en una próxima sesión, si el usuario decide
+avanzar — implica reentrenar, reconstruir la tabla de búsqueda (con el
+nuevo modelo, los umbrales reales de los árboles cambian) y revalidar
+exactitud bit a bit, igual disciplina que cualquier cambio de producción
+de este proyecto. **No implementado en esta pasada** por alcance (esta
+prueba era solo de diagnóstico).
+
+## Cierre de la ronda de 5 pruebas adicionales (2026-09-14)
+
+Resumen de las 5 pruebas que el usuario pidió correr de a una, después de
+cerrar la integración de `frecuencia_categoria_expandida` (sección 16):
+
+1. **Ablation de redundancia** (sección 17): sin redundancia, las 6
+   features actuales se quedan tal como están.
+2. **Features demográficas de Sparkov** (sección 18): cerrado por falta
+   de datos (nunca se guardaron al combinar los 61 archivos crudos), no
+   un resultado negativo del modelo.
+3. **Detector de deriva con la feature nueva** (sección 19): funciona
+   técnicamente bien, pero es ruidoso con `frecuencia_categoria_expandida`
+   (dispara recalibración 85% de las veces vs. 23% sin ella) —
+   recomendación de excluirla del monitoreo, no implementada. De paso,
+   encontró que Dominio 2 no tiene disparador de recalibración propio
+   todavía (solo existe el de Dominio 1).
+4. **Prueba adversarial** (sección 20): un ataque barato (imitar la
+   categoría típica de la cuenta) tumba el recall de 82.0% a 29.5% —
+   limitación de diseño inherente a la personalización por comportamiento,
+   documentada, no "corregida".
+5. **Búsqueda de hiperparámetros con 6 features** (esta sección): mejora
+   real pero modesta (+0.0098 AUC-PR) cambiando `learning_rate` de 0.05 a
+   0.1 — recomendación pendiente de decisión, no implementada.
+
+**Estado general de Dominio 2 después de esta ronda:** el modelo en
+producción (`src/calibrador_arboles.py` y módulos asociados) sigue
+siendo el mismo que se cerró en la sección 16 — ninguna de las 5 pruebas
+modificó `src/`, todas fueron diagnóstico puro. Quedan 3 recomendaciones
+explícitas sin implementar, a decisión del usuario: excluir la feature
+nueva del monitoreo de deriva (#3), cambiar `learning_rate` a 0.1 (#5), y
+la idea de mitigación adversarial mencionada en la sección 20 (#4, más
+especulativa). Los 186 tests de producción siguen en verde.
