@@ -1085,3 +1085,67 @@ su valor crudo, pero eso es ingeniería adicional no trivial, no un ajuste
 de una línea. Dado que no existe todavía un disparador de recalibración
 para Dominio 2 (ver arriba), esto queda anotado para cuando se construya
 uno, no como un bug urgente a corregir hoy.
+
+## 20. Prueba adversarial — evasión simple de `huella_categoria_cuenta` (2026-09-14)
+
+Todo el fraude simulado en Sparkov hasta ahora es "ingenuo": el generador
+inyecta fraude sin preocuparse por imitar el comportamiento normal de la
+cuenta. La pregunta real: ¿qué tan fácil sería evadir la detección para un
+atacante que SÍ conociera el mecanismo de `huella_categoria_cuenta` (la
+feature de mayor importancia, sección 17)?
+
+**Ataque simulado (el más simple y barato posible):** para cada una de las
+200 transacciones fraudulentas reales de TEST, reemplazar únicamente su
+`category` por la categoría más frecuente de esa cuenta en su ventana
+causal de las últimas 20 transacciones (el mismo criterio exacto que usa
+`huella_categoria_cuenta`) — sin tocar monto, momento, ni cuenta. Bajo este
+reemplazo, `huella_categoria_cuenta` se recalcula **exacto** (es el valor
+máximo alcanzable para esa cuenta en ese momento) y
+`frecuencia_categoria_expandida` también se recalcula exacto (contando
+ocurrencias reales previas de la categoría elegida en todo el historial
+global anterior a esa fila). `amt`, `hora`, `conteo_ventana_global` y
+`monto_ewma_cuenta` quedan iguales — el atacante solo controla la
+categoría, no el monto ni el momento (un atacante más agresivo podría
+camuflar también el monto; no se probó en esta pasada). **Limitación
+documentada:** no se repropaga el cambio hacia adelante (transacciones
+posteriores de la misma cuenta que verían esta categoría camuflada en su
+propia ventana) — efecto de segundo orden, ignorado por alcance.
+
+**Resultado real, sobre el modelo de producción (6 features) y el mismo
+split de TEST (234,189 filas, 200 fraudes reales):**
+
+| | Sin camuflaje | Con camuflaje |
+|---|---|---|
+| Fraudes detectados | 164/200 | **59/200** |
+| Recall | 82.0% | **29.5%** |
+| Score promedio | 0.816 | 0.322 |
+| `huella_categoria_cuenta` promedio | 0.091 | 0.738 |
+| `frecuencia_categoria_expandida` promedio | 0.0844 | 0.0579 |
+
+**Caída de recall: 52.5 puntos porcentuales — 105 de 200 fraudes dejan de
+detectarse** con el ataque más simple y barato posible (una sola decisión:
+qué categoría usar). `huella_categoria_cuenta` pasa de un promedio de 0.09
+(claramente anómalo) a 0.74 (parece comportamiento normal) — el mecanismo
+de evasión funciona exactamente como se esperaría. Notablemente,
+`frecuencia_categoria_expandida` (la feature global) **casi no se mueve**
+(0.084→0.058) — confirma lo que ya mostró el ablation de la sección 17: es
+mucho más difícil de manipular eligiendo una sola categoría, porque depende
+de la población completa, no del historial de una cuenta.
+
+**Conclusión honesta, no es un bug a corregir sino una limitación de diseño
+a comunicar:** cualquier sistema que personaliza detección aprendiendo "qué
+es normal para esta cuenta" es, por naturaleza, evadible por un adversario
+que conoce ese patrón normal y lo imita a propósito — no es un defecto
+único de SYNAPSE, es una tensión inherente al enfoque de personalización
+por comportamiento (el mismo problema que tienen los sistemas de
+recomendación y detección de bots basados en perfil). La ventaja real de
+`huella_categoria_cuenta` es contra fraude "ingenuo" (la mayoría del fraude
+real, que no está optimizado específicamente contra este mecanismo) — no
+es una promesa de robustez contra un atacante sofisticado y informado. Si
+se usa en un contexto donde el adversario podría llegar a conocer el
+mecanismo (ej. un empleado interno, o tras una filtración de cómo funciona
+el modelo), esta limitación debe comunicarse explícitamente, no asumirse
+como resuelta. Mitigación posible para el futuro, no implementada:
+una feature que mida "qué tan perfecta/típica es la elección de categoría"
+en sí misma (una elección *demasiado* óptima podría ser, paradójicamente,
+una señal secundaria de manipulación) — idea, no una solución probada.
