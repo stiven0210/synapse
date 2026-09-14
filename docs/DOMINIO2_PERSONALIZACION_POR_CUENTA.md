@@ -1022,3 +1022,66 @@ verdad para retomar. Con los datos actuales, el dataset de transacciones
 está agotado en cuanto a columnas explorables — las 6 features de
 producción son todo lo que da de sí `sparkov_2013_2026.csv` tal como existe
 hoy.
+
+## 19. Detector de deriva (`src/deriva.py`) vs. `frecuencia_categoria_expandida` — dispara demasiado seguido, recomendación real
+
+`src/deriva.py` (PSI + Kolmogorov-Smirnov, Dominio 1) es genérico —
+`evaluar_deriva()` corre sobre cualquier columna numérica de un DataFrame,
+sin ninguna dependencia real de Dominio 1. Se aplicó tal cual a las 6
+features de producción de Dominio 2. `ponderar_deriva_por_coeficiente()`
+**sí** es específico de Dominio 1 (asume un artefacto con
+`coeficientes`/modelo lineal) — no aplica al artefacto de árboles de
+Dominio 2 sin adaptarlo; **hallazgo aparte, fuera de alcance de esta
+prueba**: no existe todavía un disparador de recalibración automática para
+Dominio 2 (`disparador_recalibracion.py` es exclusivo de Dominio 1).
+
+**Control positivo — el detector SÍ ve el cambio real y esperado:**
+comparando 2013-2018 (referencia) contra 2024-2026 (actual),
+`frecuencia_categoria_expandida` da **PSI=4.84** (`deriva_significativa_recalibrar`,
+muy por encima del umbral de 0.25) — consistente con el cambio real y ya
+documentado en la sección 15.1 (`personal_care` pasando de ~0.00002 a
+~0.06). El detector funciona: no es ciego al cambio real.
+
+**El problema real — dispara casi siempre, no solo cuando importa.**
+Comparando cada año contra el siguiente (13 transiciones válidas,
+2013→2014 … 2025→2026):
+
+| Feature | Dispara recalibración (PSI>0.25) |
+|---|---|
+| `amt` | 0/13 (0%) |
+| `hora` | 3/13 (23%) |
+| `conteo_ventana_global` | 0/13 (0%) |
+| `monto_ewma_cuenta` | 1/13 (8%) |
+| `huella_categoria_cuenta` | 0/13 (0%) |
+| **`frecuencia_categoria_expandida`** | **11/13 (85%)** |
+
+**Recomendación agregada de recalibrar** (con `evaluar_deriva()` completo,
+"recalibrar si CUALQUIER feature dispara"), mismas 13 transiciones
+año-a-año:
+
+| Set de features | Recomienda recalibrar |
+|---|---|
+| 5 features (sin la nueva) | 3/13 (23%) |
+| **6 features (con la nueva)** | **12/13 (92%)** |
+
+Agregar `frecuencia_categoria_expandida` al monitoreo de deriva hace que el
+sistema recomiende recalibrar en **prácticamente todas** las transiciones
+de año — no porque el modelo se esté deteriorando, sino porque esta
+feature, por construcción (frecuencia expandida, Laplace), **siempre** se
+mueve con el tiempo — es su comportamiento normal y esperado, documentado
+desde que se introdujo (sección 15.1), no una anomalía real cada vez que
+ocurre.
+
+**Veredicto honesto: el comportamiento actual de `deriva.py` con esta
+feature es técnicamente correcto (mide bien el movimiento real) pero
+operativamente ruidoso (recalibraría casi siempre, sin discriminar entre
+"cambio esperado por diseño" y "deterioro real que amerita atención").**
+Recomendación real, no implementada en esta pasada: **excluir
+`frecuencia_categoria_expandida` del set de columnas que se le pasan a
+`evaluar_deriva()`/un futuro disparador de recalibración para Dominio 2**
+(monitorear las otras 5 normalmente) — o, alternativa más elaborada,
+monitorear su *tasa de cambio* relativa a una tendencia esperada en vez de
+su valor crudo, pero eso es ingeniería adicional no trivial, no un ajuste
+de una línea. Dado que no existe todavía un disparador de recalibración
+para Dominio 2 (ver arriba), esto queda anotado para cuando se construya
+uno, no como un bug urgente a corregir hoy.
