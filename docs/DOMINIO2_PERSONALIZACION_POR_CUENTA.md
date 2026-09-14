@@ -1,7 +1,8 @@
 # Dominio 2 — Personalización por cuenta (investigación en curso)
 
-**Estado:** Exploración y validación completas con resultados reales. Integración
-de producción (artefacto de árboles + Ejecutor compatible) pendiente de construir.
+**Estado:** Exploración, validación e integración de producción completas con
+resultados reales (ver sección 13). Sigue en fase de pruebas -- nada de esto
+se ha desplegado ni conectado a tráfico real.
 
 **Por qué existe esto:** Fase 0 (Dominio 1) documentó una limitación real: el
 dataset de Credit Card Fraud no tiene identificador de cuenta, así que el
@@ -363,13 +364,14 @@ calibrados quedan cerca de la tasa real (0.59% / 79.2% / 100% vs. reales de
 modelo — esa herramienta asume que el score es una probabilidad real, no solo
 un buen orden relativo.
 
-## Estado: afinamiento completo, integración de producción no iniciada
+## Estado: afinamiento completo, integración de producción completa (ver sección 13)
 
 Los 5 pasos quedaron cerrados con resultado positivo en cada uno. Modelo
 final: Gradient Boosting, 5 features, `max_depth=3, learning_rate=0.05,
 max_iter=200`, con calibración isotónica como paso de post-procesamiento.
-**Ningún código de producción se ha escrito todavía** — todo lo de este
-documento son scripts exploratorios de una sola vez, no módulos del repo.
+La integración de producción (artefacto + Ejecutor + Ciclo, sección 6) se
+construyó el 2026-09-14 — ver sección 13 para el detalle y las cifras reales
+reproducidas.
 
 ## 8. Validación contra mercado LatAm real — corrección importante de prevalencia
 
@@ -502,8 +504,7 @@ un solo campo. Reporte completo en `data/reporte_grafo_fractal_ieee.json`.
   en el europeo). Ver tabla comparativa en la sesión del 2026-09-13.
 - Construir la integración de producción de la sección 6 (artefacto de
   árboles + Ejecutor compatible + calibración isotónica como parte del
-  artefacto) — recién ahora que el afinamiento está cerrado, queda a
-  decisión del usuario cuándo empezar.
+  artefacto) — **CERRADO 2026-09-14**, ver sección 13.
 - Validación exploratoria barata de señales de red entre cuentas (colusión) —
   requiere recuperar el campo `merchant`, descartado al combinar los archivos.
   **Intentado 2026-09-13, resultado negativo, ver detalle abajo.**
@@ -580,3 +581,131 @@ anualmente sería razonable** en un despliegue real — aunque con solo 35-106
 fraudes por año la pendiente exacta tiene incertidumbre estadística real, la
 dirección (siempre bajando) es consistente en los 3 períodos, no un
 accidente de un corte. Reporte en `data/reporte_concept_drift_sparkov.json`.
+
+## 13. Integración de producción — construida y validada (2026-09-14)
+
+Cierra el pendiente de la sección 6: el artefacto de árboles + Ejecutor
+compatible + `CicloDecision` paralelo, ya en `src/`, no en scripts de
+scratchpad. **Camino paralelo a Dominio 1, sin tocar ningún archivo
+existente** (`artefacto.py`, `ejecutor.py`, `ciclo.py`, `calibrador.py`,
+`features_recursivas.py`, `veto.py`, `puente.py` quedan intactos) — se
+reutilizan sin modificar `veto.py::evaluar` (independiente del modelo por
+diseño) y `features_recursivas.py::EstadoRecursivoGlobal`/`calcular_features_recursivas_batch`
+para `conteo_ventana_global` (misma métrica global de Dominio 1).
+
+**Módulos nuevos:**
+- `src/features_recursivas_cuenta.py` — `monto_ewma_cuenta` y
+  `huella_categoria_cuenta` por cuenta (`EstadoRecursivoPorCuenta` para el
+  Ejecutor, `calcular_features_recursivas_cuenta_batch` para el Calibrador),
+  con la misma disciplina de paridad batch/incremental que Dominio 1
+  (verificada con test explícito, no solo compartiendo código).
+- `src/artefacto_arboles.py` — contrato neutral: en vez de serializar los
+  175 árboles para recorrerlos en caliente (más lento, ver sección 6), el
+  artefacto guarda directamente la **tabla de búsqueda v3** (umbrales reales
+  del modelo + tabla plana) y la calibración isotónica como breakpoints
+  `x`/`y` (interpolación lineal en Python puro, verificada idéntica a
+  `IsotonicRegression.predict(out_of_bounds="clip")`).
+- `src/calibrador_arboles.py` — entrena `HistGradientBoostingClassifier`
+  sobre `data/raw/sparkov_2013_2026.csv` (columna `class_weight="balanced"`
+  soportada nativamente por el constructor en sklearn 1.9.1, no hizo falta
+  `sample_weight` manual), extrae los umbrales reales de los nodos, y
+  construye la tabla evaluando `predict_proba` una sola vez por combinación
+  de bin (vectorizado con `np.meshgrid`, no en Python puro -- eso corre en
+  calibración, nunca en el camino caliente).
+- `src/ejecutor_arboles.py` — `EjecutorArboles`, capa rápida: solo
+  `bisect_left` + indexación de tabla plana (sin recorrer árboles, sin
+  diccionarios de nodos), reusa `EstadoRecursivoGlobal` y
+  `EstadoRecursivoPorCuenta`.
+- `src/puente_arboles.py` / `src/ciclo_arboles.py` — escritura atómica y
+  único punto de entrada sancionado, mismas garantías que Dominio 1
+  (artefacto siempre por el Puente, resultado siempre por `veto.py`,
+  cualquier excepción del Ejecutor escala a revisión manual). `veto.py`
+  espera la clave `Amount` (contrato de Dominio 1) -- `CicloDecisionArboles`
+  agrega un alias de `amt` al llamar a `evaluar_veto`, sin modificar
+  `veto.py`.
+
+**Cifras reales reproducidas** (split temporal 60/20/20 sobre las 1,170,945
+filas, `random_state=42`):
+
+| | VAL | TEST |
+|---|---|---|
+| n | 234,189 | 234,189 (200 fraudes reales) |
+| Precisión | 88.7% | 87.8% |
+| Recall | 81.8% | 83.0% |
+| F1 | 0.851 | 0.853 |
+| AUC-ROC | 0.9999 | 0.9999 |
+| AUC-PR | 0.898 | 0.901 |
+
+**Umbrales reales extraídos de los 175 árboles** (definen los bins de la
+tabla): `amt` 42, `hora` 13, `conteo_ventana_global` 1, `monto_ewma_cuenta`
+27, `huella_categoria_cuenta` 15 → tabla de `43×14×2×28×16 = 539,392`
+combinaciones (vs. las 692,550 de la sección 6 -- ese número salió del
+modelo previo a la búsqueda de hiperparámetros del Paso 4, con
+`max_depth=6`; el modelo final `max_depth=3` genera árboles más simples con
+menos cortes únicos por feature, tabla más chica, mismo principio).
+
+**Exactitud bit a bit, verificada sobre las 234,189 filas completas de TEST**
+(replay desde el inicio de TODO el historial -- train+val+test en orden, no
+solo el tramo de test, para que el estado recursivo por cuenta/global
+arranque igual que en producción real, no vacío en un corte arbitrario):
+MAE = 1.94×10⁻²³, diferencia máxima = 3.47×10⁻¹⁸, correlación = 1.000000 —
+bit-perfecto contra `predict_proba()` + calibración isotónica real,
+replicando el resultado de la sección 6.
+
+**Latencia real medida** (`time.perf_counter()`, metodología de
+`scripts/validacion_end_to_end.py`, 1,170,945 decisiones): **9.84
+µs/decisión** para `EjecutorArboles.decidir()` completo (tabla + ambos
+estados recursivos, global y por cuenta) — comparable al Ejecutor de
+Dominio 1 (8.33 µs). Aislando solo la tabla de búsqueda (sin mantenimiento
+de estado, misma metodología que la sección 6): **3.51 µs/decisión**. Ambos
+números son **más altos que los 1.53 µs reportados en la sección 6** — esa
+cifra medía solo la aritmética de la tabla con features ya calculadas, sin
+el costo real de mantener `EstadoRecursivoPorCuenta` (una `deque` de 20
+categorías + un diccionario por cuenta) ni de `hora_utc()`
+(`datetime.fromtimestamp` por decisión). El número honesto y comparable
+contra Dominio 1 es el de camino completo: **9.84 µs**, no 1.53 µs — sigue
+siendo ~5,000x más rápido que una ventana de autorización típica de redes
+de tarjetas, no es un bloqueante real.
+
+**Desviación honesta de las cifras del afinamiento:** el AUC-PR real
+(0.898/0.901 val/test) queda por debajo del 0.966±0.013 reportado en el
+Paso 4 del afinamiento (promedio de 5 folds *walk-forward* con ventana
+expansiva) y de los puntos 0.973/0.961 del Paso 5. Explicación más probable,
+no verificada exhaustivamente: aquí se usa un único split fijo 60/20/20
+(mayor varianza que un promedio de 5 folds), más diferencias menores de
+reimplementación (regla exacta de respaldo poblacional bajo
+`min_historial=5`, `random_state=42`, versión de sklearn). El número sigue
+muy por encima del benchmark publicado (AUC-PR 0.51-0.66) y es del mismo
+orden que los resultados originales pre-afinamiento de la sección 5 — no se
+investigó más a fondo (ej. correr el mismo 5-fold walk-forward sobre esta
+implementación) porque no formaba parte del alcance de esta tarea.
+
+**132 tests de Dominio 1 siguen en verde, sin modificar ningún archivo
+existente.** 50 tests nuevos (`tests/test_features_recursivas_cuenta.py`,
+`tests/test_artefacto_arboles.py`, `tests/test_puente_arboles.py`,
+`tests/test_ciclo_arboles.py`, `tests/test_calibrador_arboles.py`,
+`tests/test_ejecutor_arboles.py`) — suite completa: **182 tests, todos en
+verde**. Incluyen el test bit-exacto de arriba (con skip automático si
+`data/raw/sparkov_2013_2026.csv` no está presente) y una versión rápida
+equivalente sobre un dataset sintético pequeño para no depender del CSV real
+de 119MB en cada corrida.
+
+**Dos hallazgos reales de la auditoría en el camino, corregidos antes de
+cerrar:**
+1. `artefacto_arboles._es_numero` rechazaba `NaN` en la validación de forma
+   -- inconsistente con `artefacto.py` de Dominio 1 (que sí acepta NaN ahí,
+   dejando la protección real a `veto.py`). Corregido para que el contrato
+   sea el mismo en ambos dominios.
+2. `_interpolar_isotonica` (la interpolación lineal pura de la calibración)
+   reventaba con `IndexError` ante un score de entrada `NaN` -- `bisect` no
+   sabe comparar NaN, y ni `x <= xs[0]` ni `x >= xs[-1]` son verdaderos para
+   NaN, así que caía al camino de interpolación normal y se salía del
+   arreglo. Corregido con un chequeo explícito al inicio (`math.isnan`) que
+   devuelve NaN limpio, igual que `Ejecutor._sigmoide` de Dominio 1
+   (`math.exp(nan)` no lanza). Encontrado por un test que construía a
+   propósito un artefacto con `NaN` en la tabla.
+
+**No se tocó ningún ADR existente** (son de Dominio 1, siguen vigentes tal
+cual). **No se hizo commit ni deploy de nada** -- queda a decisión del
+usuario. **Pendiente sin empezar, sin cambios respecto a antes:** Camino 3
+(dominio IoT) sigue abierto, ver "Pendiente explícito" más arriba.

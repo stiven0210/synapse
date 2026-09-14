@@ -1,7 +1,9 @@
 # Plan de trabajo — SYNAPSE
 
-**Estado general:** Fases 0 a 5 completas + auditoría post-implementación
-(12 hallazgos, 10 corregidos).
+**Estado general:** Fases 0 a 5 (Dominio 1) completas + auditoría
+post-implementación (12 hallazgos, 10 corregidos). Dominio 2
+(personalización por cuenta) con afinamiento e integración de producción
+completos -- ver `docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md`.
 
 ## Fases (ver plan aprobado para el detalle completo de cada una)
 
@@ -679,3 +681,35 @@ round-trip exacto; sin estado mutable compartido entre instancias.
 
 9 tests nuevos reproduciendo cada hallazgo antes de corregirlo. Suite
 completa: 132 tests.
+
+## ✅ Dominio 2 — integración de producción (personalización por cuenta) — completo
+
+Ver `docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md` (sección 13) para el
+detalle completo -- resumen aquí para continuidad del plan general.
+
+Construido el 2026-09-14, camino paralelo a Dominio 1 sin modificar ninguno
+de sus archivos: `src/features_recursivas_cuenta.py` (features por cuenta,
+`monto_ewma_cuenta`/`huella_categoria_cuenta`, misma disciplina de paridad
+batch/incremental), `src/artefacto_arboles.py` (contrato neutral con tabla
+de búsqueda v3, no árboles crudos), `src/calibrador_arboles.py` (entrena
+Gradient Boosting sobre Sparkov, extrae umbrales reales, construye la
+tabla), `src/ejecutor_arboles.py` (`EjecutorArboles`, solo `bisect` + tabla
+plana), `src/puente_arboles.py`/`src/ciclo_arboles.py` (mismas garantías de
+Dominio 1: Puente siempre, Veto siempre -- reusa `veto.py` sin modificarlo,
+excepciones del Ejecutor escalan a revisión manual).
+
+Cifras reales (split 60/20/20, 1,170,945 filas): AUC-PR 0.898 (VAL) / 0.901
+(TEST), tabla de búsqueda exacta bit a bit contra `predict_proba()` real
+(diff máxima 3.47×10⁻¹⁸ sobre las 234,189 filas de TEST), latencia real
+9.84 µs/decisión (comparable a los 8.33 µs de Dominio 1). Dos bugs reales
+encontrados y corregidos en el camino: NaN rechazado indebidamente en la
+validación del artefacto, e `IndexError` real al interpolar un score NaN en
+la calibración isotónica (`bisect` no compara NaN). Detalle de ambos y de la
+desviación honesta contra las cifras del afinamiento (AUC-PR real más bajo
+que el 0.966±0.013 promediado en 5 folds) en la sección 13 del doc de
+Dominio 2.
+
+50 tests nuevos, suite completa del repo: **182 tests, todos en verde**. Sin
+commit, sin deploy -- SYNAPSE sigue en fase de pruebas. Pendiente sin
+empezar: Camino 3 (segundo dominio genuinamente distinto de fraude, ej.
+IoT).
