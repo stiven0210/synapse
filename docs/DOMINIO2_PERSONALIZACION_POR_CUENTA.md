@@ -1257,8 +1257,39 @@ cerrar la integración de `frecuencia_categoria_expandida` (sección 16):
 producción cambió una vez respecto a lo que cerró la sección 16 —
 `learning_rate=0.1` en vez de `0.05` (hallazgo #5, implementado y
 reverificado bit a bit). Las otras 4 pruebas fueron diagnóstico puro, sin
-tocar `src/`. Quedan 2 recomendaciones explícitas sin implementar, a
-decisión del usuario: excluir `frecuencia_categoria_expandida` del
-monitoreo de deriva (#3), y la idea de mitigación adversarial mencionada
-en la sección 20 (#4, más especulativa, sin diseño concreto todavía). Los
-186 tests de producción siguen en verde.
+tocar `src/`. Las dos recomendaciones que quedaban abiertas ya se
+cerraron (ver abajo): #3 (excluir `frecuencia_categoria_expandida` del
+monitoreo de deriva) implementada vía `FEATURES_MONITOREO_DERIVA`; #4
+(mitigación adversarial) probada y descartada, ver sección 22.
+
+## 22. Mitigación adversarial probada y descartada (2026-09-14)
+
+Cierra la recomendación especulativa de la sección 20 ("una feature que
+mida qué tan perfecta/típica es la elección de categoría"). Diseño
+concreto probado: `brecha_categoria = huella_categoria_cuenta -
+frecuencia_categoria_expandida` como 7ma feature — bajo el ataque de la
+sección 20, `huella` salta a ~0.74 pero `frecuencia_expandida` casi no se
+mueve (~0.06), brecha ~0.68 vs. ~0.007 en fraude normal sin camuflar.
+
+**Resultado real (walk-forward 5-fold para AUC-PR general, split único
+para el ataque, misma metodología de la sección 20):**
+
+| | 6 features (producción) | 7 features (+ `brecha_categoria`) |
+|---|---|---|
+| AUC-PR general (5-fold) | 0.9568 ± 0.0240 | **0.9479 ± 0.0322** |
+| Recall sin camuflaje | 82.0% (164/200) | 83.0% (166/200) |
+| Recall con camuflaje | 29.5% (59/200) | **33.5% (67/200)** |
+
+**Veredicto honesto: no vale la pena.** Recupera solo 4 puntos de recall
+bajo ataque (29.5%→33.5%, lejos del 82-83% normal), a costa de empeorar
+el AUC-PR general (-0.0089) y aumentar la varianza entre folds (±0.024→
+±0.032). El costo en desempeño general supera el beneficio marginal
+contra este ataque específico — mismo patrón que otros intentos de
+mejora descartados en este proyecto (EWMA de la sección 15.2, suavizado
+de Camino 3): una idea razonable en teoría que no se sostiene con datos
+reales. **No implementado en `src/`.**
+
+Con esto, las 5 recomendaciones que salieron de la ronda de pruebas
+quedan todas resueltas (3 implementadas, 2 probadas y descartadas
+honestamente). No queda ningún hallazgo pendiente de decisión en
+Dominio 2 al cierre de esta sesión.
