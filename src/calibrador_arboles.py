@@ -39,6 +39,12 @@ FEATURES_ARBOLES = [
     "amt", "hora", "conteo_ventana_global", "monto_ewma_cuenta", "huella_categoria_cuenta",
     "frecuencia_categoria_expandida",
 ]
+# Subconjunto a pasarle a `deriva.py::evaluar_deriva()` -- excluye `frecuencia_categoria_expandida`
+# a propósito (sección 19 del doc: es no estacionaria por diseño, dispara recalibración en el
+# 85% de las transiciones año a año frente al 23% del resto, falsa alarma constante, no señal
+# real de deterioro). Sin disparador de recalibración propio todavía para Dominio 2 -- esta
+# constante deja el conjunto correcto ya decidido para cuando se construya uno.
+FEATURES_MONITOREO_DERIVA = [f for f in FEATURES_ARBOLES if f != "frecuencia_categoria_expandida"]
 COLUMNAS_CRUDAS_REQUERIDAS = {"cc_num", "amt", "unix_time", "category", "is_fraud"}
 
 # Configuración ganadora del Paso 4 del afinamiento (docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md),

@@ -6,6 +6,7 @@ from src.artefacto_arboles import validar_artefacto_arboles
 from src.calibrador import DatasetInvalido
 from src.calibrador_arboles import (
     FEATURES_ARBOLES,
+    FEATURES_MONITOREO_DERIVA,
     _calibrar_detalle,
     _mejor_umbral_por_f1,
     cargar_dataset,
@@ -112,3 +113,13 @@ def test_tabla_busqueda_bit_exacta_contra_predict_proba_dataset_sintetico(pipeli
     scores_test_reales = np.interp(scores_crudos_reales, xs, ys)
 
     assert np.abs(scores_test_ejecutor - scores_test_reales).max() < 1e-9
+
+
+def test_features_monitoreo_deriva_excluye_frecuencia_categoria_expandida():
+    # Sección 19 del doc: frecuencia_categoria_expandida es no estacionaria por diseño y
+    # dispara recalibración en el 85% de las transiciones año a año (vs. 23% del resto) --
+    # falsa alarma constante, no señal real. Se excluye del set que se le pasa a
+    # deriva.py::evaluar_deriva(), sin tocar ese módulo (ya es genérico sobre cualquier columna).
+    assert "frecuencia_categoria_expandida" not in FEATURES_MONITOREO_DERIVA
+    assert set(FEATURES_MONITOREO_DERIVA) == set(FEATURES_ARBOLES) - {"frecuencia_categoria_expandida"}
+    assert len(FEATURES_MONITOREO_DERIVA) == len(FEATURES_ARBOLES) - 1
