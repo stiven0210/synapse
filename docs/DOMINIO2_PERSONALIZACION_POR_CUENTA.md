@@ -508,9 +508,11 @@ un solo campo. Reporte completo en `data/reporte_grafo_fractal_ieee.json`.
 - Validación exploratoria barata de señales de red entre cuentas (colusión) —
   requiere recuperar el campo `merchant`, descartado al combinar los archivos.
   **Intentado 2026-09-13, resultado negativo, ver detalle abajo.**
-- Point-in-time encoding de `category` (sección 2), si se retoma esa feature.
+- Point-in-time encoding de `category` (sección 2), si se retoma esa feature —
+  **CERRADO 2026-09-14, resultado positivo**, ver sección 15.
 - Huella de comportamiento con decaimiento tipo EWMA en vez de ventana de
-  conteo fijo (refinamiento menor, no bloqueante).
+  conteo fijo — **CERRADO 2026-09-14, resultado negativo/inconcluso**, ver
+  sección 15.
 
 ## 11. Saerens-Latinne-Decaestecker (SLD) — corrección de prevalencia más rigurosa (2026-09-13)
 
@@ -788,3 +790,89 @@ Una cuenta nueva en producción real arrancaría en el escenario más débil.
 AUC-PR (según el escenario de historial), no 0.966 — ese número del Paso 4
 queda marcado como no reproducido con el código de producción y su origen
 exacto sin confirmar (script exploratorio ya no disponible).
+
+## 15. Dos refinamientos menores explorados (2026-09-14)
+
+Cierra los 2 últimos ítems de "Pendiente explícito". Exploración pura —
+nada de esto se llevó a `src/`. Misma metodología de comparación que la
+sección 14 (walk-forward 5-fold, `frac_train_inicial=0.5`,
+`HistGradientBoostingClassifier(max_depth=3, learning_rate=0.05,
+max_iter=200, class_weight="balanced", random_state=42)`, isotónica en VAL,
+AUC-PR sobre scores calibrados), contra el mismo baseline de 5 features:
+**0.914 ± 0.030** (folds: 0.877, 0.879, 0.931, 0.935, 0.947).
+
+### 15.1 Point-in-time encoding de `category` — resultado positivo
+
+Se agregó una 6ta feature, `frecuencia_categoria_expandida`: para cada
+fila, `(conteo_categoria_hasta_ahora + 1) / (conteo_total_hasta_ahora +
+n_categorias)` — causal (solo cuenta filas estrictamente anteriores) y
+expandible (se recalcula fila a fila sobre todo el historial, con
+suavizado de Laplace `alpha=1` para no dar valores extremos en las
+primeras apariciones de una categoría).
+
+**Verificado explícitamente que NO reproduce la trampa de no-estacionariedad
+de la sección 2** (one-hot fijo + split temporal rompiendo el modelo por
+`personal_care`): la trayectoria real de esta feature para esa categoría
+por año —
+
+| Año | Transacciones | Valor medio de la feature |
+|---|---|---|
+| 2013-2023 (11 años) | 1-4 por año | 0.000023 – 0.000090 |
+| 2025 | 63,876 | 0.029253 |
+| 2026 | 18,580 | 0.064972 |
+
+— muestra que el valor **se adapta suavemente** al volumen real, sin
+quedar pegado a las ~24 filas tempranas: a diferencia de un one-hot
+estático ajustado una sola vez, acá el peso de esa evidencia vieja se
+diluye solo (por construcción) a medida que crece el denominador total.
+No hay coeficiente fijo aprendiendo una regla espuria de pocas filas.
+
+**Resultado (6 features vs. 5 baseline):**
+
+| | AUC-PR por fold | Media | Desviación |
+|---|---|---|---|
+| Baseline (5 features) | 0.877, 0.879, 0.931, 0.935, 0.947 | 0.914 | ±0.030 |
+| **+ `frecuencia_categoria_expandida` (6 features)** | 0.907, 0.923, 0.976, 0.958, 0.970 | **0.947** | ±0.027 |
+
+**Mejora real de +0.033 AUC-PR, consistente en los 5 folds** (mejora en
+4 de 5, el fold 0 queda prácticamente igual). No es ruido — la magnitud y
+la consistencia entre folds son mayores que la desviación estándar.
+
+**Recomendación:** vale la pena llevar esta feature a producción
+(`src/calibrador_arboles.py` + `src/ejecutor_arboles.py`) en una próxima
+sesión, si el usuario decide avanzar — no implementado en esta pasada por
+alcance.
+
+### 15.2 Huella con decaimiento EWMA en vez de ventana fija K=20 — resultado negativo/inconcluso
+
+Se reemplazó `huella_categoria_cuenta` (ventana causal de las últimas 20
+transacciones de la cuenta) por un histograma de categorías por cuenta con
+decaimiento exponencial: en cada transacción, todos los pesos existentes
+decaen por `lambda`, se suma `(1-lambda)` a la categoría actual, y la
+huella es el peso normalizado de la categoría actual (respaldo poblacional
+igual que hoy para cuentas con <5 transacciones reales, no ponderadas).
+
+**Resultado (reemplazando la huella de ventana fija, no agregándola):**
+
+| Variante | AUC-PR por fold | Media | Desviación |
+|---|---|---|---|
+| Baseline (ventana fija K=20) | 0.877, 0.879, 0.931, 0.935, 0.947 | 0.914 | ±0.030 |
+| EWMA λ=0.98 (mismo λ que el resto del proyecto) | 0.857, 0.852, 0.931, 0.904, 0.924 | **0.894** | ±0.033 |
+| EWMA λ=0.9 (decaimiento más rápido) | 0.866, 0.901, 0.950, 0.941, 0.958 | **0.923** | ±0.035 |
+
+**λ=0.98 empeora de forma clara** (-0.020, peor en 4 de 5 folds).
+**λ=0.9 mejora levemente** (+0.009), pero la desviación estándar (±0.033-0.035)
+es mayor que la diferencia — no hay evidencia sólida de que sea una mejora
+real y no ruido de muestreo.
+
+**Veredicto honesto: no hay caso claro para reemplazar la ventana fija de
+20 transacciones.** La ventana fija (que "olvida" del todo después de 20
+transacciones) parece capturar mejor "comportamiento reciente típico" que
+un decaimiento suave que nunca olvida del todo — posiblemente porque el
+comportamiento de cuenta en Sparkov no tiene una deriva gradual que el
+decaimiento aproveche, similar en espíritu al hallazgo de Camino 3 (el
+suavizado EWMA tampoco ayudó ahí, por la misma razón: no toda señal se
+beneficia de memoria larga).
+
+**Recomendación:** no llevar este cambio a producción — la versión actual
+(ventana fija K=20) se mantiene como la mejor opción validada.
