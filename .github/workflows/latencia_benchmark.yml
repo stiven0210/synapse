@@ -1,0 +1,19 @@
+name: Benchmark de latencia (validacion en la nube)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+      - name: Correr benchmark de latencia (Dominio 1, sintetico, sin dependencia de datasets grandes)
+        run: python -m pytest tests/test_ejecutor.py -k latencia -s -v
+      - name: Correr suite completa (informativo -- los tests que necesitan datasets grandes se saltan solos)
+        run: python -m pytest -q
