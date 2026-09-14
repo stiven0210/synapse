@@ -4,8 +4,10 @@ import pytest
 
 from src.features_recursivas import TiempoFueraDeOrden
 from src.features_recursivas_cuenta import (
+    EstadoFrecuenciaCategoriaGlobal,
     EstadoRecursivoPorCuenta,
     calcular_features_recursivas_cuenta_batch,
+    calcular_frecuencia_categoria_expandida_batch,
     calcular_frecuencia_poblacional_categoria,
     hora_utc,
 )
@@ -127,3 +129,45 @@ def test_batch_e_incremental_coinciden_exactamente_en_secuencia_aleatoria_multi_
 
     assert resultado_batch["monto_ewma_cuenta"].to_numpy() == pytest.approx(np.array(ewma_incremental))
     assert resultado_batch["huella_categoria_cuenta"].to_numpy() == pytest.approx(np.array(huella_incremental))
+
+
+def test_frecuencia_categoria_expandida_caso_conocido_a_mano():
+    # n_categorias=2 ("grocery","gas"). Secuencia: grocery,grocery,gas,grocery.
+    # fila 0 (grocery): (0+1)/(0+2) = 0.5
+    # fila 1 (grocery): (1+1)/(1+2) = 2/3
+    # fila 2 (gas):     (0+1)/(2+2) = 0.25
+    # fila 3 (grocery): (2+1)/(3+2) = 0.6
+    df = pd.DataFrame({"category": ["grocery", "grocery", "gas", "grocery"]})
+    resultado = calcular_frecuencia_categoria_expandida_batch(df, n_categorias=2)
+    assert resultado["frecuencia_categoria_expandida"].tolist() == pytest.approx([0.5, 2 / 3, 0.25, 0.6])
+
+
+def test_estado_frecuencia_categoria_global_incremental_caso_conocido():
+    # Misma secuencia y mismos valores esperados que el test batch de arriba -- verifica
+    # el estado incremental de forma directa e independiente, no solo contra el batch.
+    estado = EstadoFrecuenciaCategoriaGlobal(n_categorias=2)
+    valores = []
+    for categoria in ["grocery", "grocery", "gas", "grocery"]:
+        valores.append(estado.leer(categoria))
+        estado.actualizar(categoria)
+    assert valores == pytest.approx([0.5, 2 / 3, 0.25, 0.6])
+
+
+def test_frecuencia_categoria_expandida_batch_e_incremental_coinciden_exactamente():
+    # Paridad train/serve para la feature nueva (sección 15.1/16 del doc) -- misma disciplina
+    # que el resto del módulo: batch e incremental deben coincidir exacto, no aproximado.
+    rng = np.random.default_rng(11)
+    n = 1000
+    categorias_posibles = ["grocery", "gas", "entertainment", "misc", "travel"]
+    categorias = rng.choice(categorias_posibles, size=n)
+    df = pd.DataFrame({"category": categorias})
+
+    resultado_batch = calcular_frecuencia_categoria_expandida_batch(df, n_categorias=len(categorias_posibles))
+
+    estado = EstadoFrecuenciaCategoriaGlobal(n_categorias=len(categorias_posibles))
+    valores_incrementales = []
+    for categoria in categorias:
+        valores_incrementales.append(estado.leer(categoria))
+        estado.actualizar(categoria)
+
+    assert resultado_batch["frecuencia_categoria_expandida"].to_numpy() == pytest.approx(np.array(valores_incrementales))

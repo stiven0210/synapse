@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 from src.artefacto_arboles import ArtefactoArbolesInvalido, validar_artefacto_arboles
 from src.features_recursivas import EstadoRecursivoGlobal
-from src.features_recursivas_cuenta import EstadoRecursivoPorCuenta, hora_utc
+from src.features_recursivas_cuenta import EstadoFrecuenciaCategoriaGlobal, EstadoRecursivoPorCuenta, hora_utc
 
 __all__ = ["ArtefactoArbolesInvalido", "EjecutorArboles", "validar_artefacto_arboles"]
 
@@ -59,6 +59,7 @@ class EjecutorArboles:
     artefacto: dict
     estado_global: EstadoRecursivoGlobal = field(default_factory=EstadoRecursivoGlobal)
     estado_cuenta: EstadoRecursivoPorCuenta = None  # se inicializa en __post_init__ con la frecuencia del artefacto
+    estado_frecuencia_categoria: EstadoFrecuenciaCategoriaGlobal = None  # idem, con n_categorias del artefacto
 
     def __post_init__(self) -> None:
         validar_artefacto_arboles(self.artefacto)
@@ -68,6 +69,11 @@ class EjecutorArboles:
 
         if self.estado_cuenta is None:
             self.estado_cuenta = EstadoRecursivoPorCuenta(frecuencia_categoria=self.artefacto["frecuencia_poblacional_categoria"])
+        if self.estado_frecuencia_categoria is None:
+            # n_categorias = vocabulario de categorías conocidas de TRAIN -- mismo criterio que
+            # `calibrador_arboles.construir_features` (ver ese docstring), no un campo nuevo del artefacto.
+            n_categorias = len(self.artefacto["frecuencia_poblacional_categoria"])
+            self.estado_frecuencia_categoria = EstadoFrecuenciaCategoriaGlobal(n_categorias=n_categorias)
 
         # Precómputo hecho UNA VEZ al construir, no en cada decidir(): strides para indexar la
         # tabla plana en O(1) sin reshape de numpy en el camino caliente (mismo espíritu que
@@ -96,6 +102,7 @@ class EjecutorArboles:
 
         _, conteo_ventana_global = self.estado_global.leer_features(monto, tiempo)
         monto_ewma_cuenta, huella_categoria_cuenta = self.estado_cuenta.leer_features(cc_num, monto, categoria, tiempo)
+        frecuencia_categoria_expandida = self.estado_frecuencia_categoria.leer(categoria)
         hora = hora_utc(tiempo)
 
         valores = {
@@ -104,6 +111,7 @@ class EjecutorArboles:
             "conteo_ventana_global": conteo_ventana_global,
             "monto_ewma_cuenta": monto_ewma_cuenta,
             "huella_categoria_cuenta": huella_categoria_cuenta,
+            "frecuencia_categoria_expandida": frecuencia_categoria_expandida,
         }
 
         indice_plano = 0
@@ -119,6 +127,7 @@ class EjecutorArboles:
         # la transacción actual nunca se ve a sí misma en su propio contexto reciente.
         self.estado_global.actualizar(monto, tiempo)
         self.estado_cuenta.actualizar(cc_num, monto, categoria, tiempo)
+        self.estado_frecuencia_categoria.actualizar(categoria)
 
         # Igual que Ejecutor de Dominio 1: si score es NaN, `nan >= umbral` da False en Python --
         # deliberado, no se guarda aquí. La razón de ser de `veto.py` (que SÍ distingue NaN) es

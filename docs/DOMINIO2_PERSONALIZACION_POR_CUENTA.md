@@ -839,9 +839,9 @@ No hay coeficiente fijo aprendiendo una regla espuria de pocas filas.
 la consistencia entre folds son mayores que la desviación estándar.
 
 **Recomendación:** vale la pena llevar esta feature a producción
-(`src/calibrador_arboles.py` + `src/ejecutor_arboles.py`) en una próxima
-sesión, si el usuario decide avanzar — no implementado en esta pasada por
-alcance.
+(`src/calibrador_arboles.py` + `src/ejecutor_arboles.py`). **Implementado
+2026-09-14, ver sección 16** — AUC-PR real de producción confirmó la
+mejora (0.947±0.027 en 5-fold, reproduciendo casi exacto este hallazgo).
 
 ### 15.2 Huella con decaimiento EWMA en vez de ventana fija K=20 — resultado negativo/inconcluso
 
@@ -876,3 +876,70 @@ beneficia de memoria larga).
 
 **Recomendación:** no llevar este cambio a producción — la versión actual
 (ventana fija K=20) se mantiene como la mejor opción validada.
+
+## 16. `frecuencia_categoria_expandida` llevada a producción (2026-09-14)
+
+Cierra la recomendación de la sección 15.1: la 6ta feature (point-in-time
+encoding causal de `category`, Laplace `alpha=1`) ya está en `src/`, no solo
+en exploración.
+
+**Archivos modificados:**
+- `src/features_recursivas_cuenta.py` — nueva función batch
+  `calcular_frecuencia_categoria_expandida_batch(df, n_categorias)`
+  (vectorizada: `groupby("category").cumcount()` para el conteo causal por
+  categoría + `np.arange` para el total, sin loop) y nueva clase de estado
+  incremental `EstadoFrecuenciaCategoriaGlobal` (global, no por cuenta —
+  vive en este módulo por cohesión con `calcular_frecuencia_poblacional_categoria`,
+  no porque sea "por cuenta"). `n_categorias` se deriva de
+  `len(frecuencia_poblacional_categoria)` (vocabulario de TRAIN) en vez de
+  agregar un campo nuevo al artefacto.
+- `src/calibrador_arboles.py` — `FEATURES_ARBOLES` pasa de 5 a 6 entradas;
+  `construir_features()` agrega la feature nueva.
+- `src/ejecutor_arboles.py` — `EjecutorArboles` mantiene
+  `EstadoFrecuenciaCategoriaGlobal` junto a los otros dos estados
+  recursivos, alimentando la 6ta dimensión de la tabla de búsqueda.
+- `src/artefacto_arboles.py` — **sin cambios de esquema**: `features` ya
+  era una lista genérica, y `n_categorias` se reutiliza de
+  `frecuencia_poblacional_categoria` en vez de un campo nuevo.
+- Tests nuevos: 3 en `tests/test_features_recursivas_cuenta.py` (caso a
+  mano, estado incremental aislado, paridad batch/incremental sobre
+  secuencia aleatoria) + 1 en `tests/test_ejecutor_arboles.py` (confirma
+  que la feature nueva participa de verdad en la tabla de búsqueda, con un
+  artefacto sintético de 6 features).
+
+**Cifras reales reproducidas** (código de producción, no el script
+exploratorio):
+
+| Metodología | AUC-PR | Comparar contra (5 features) |
+|---|---|---|
+| 5-fold walk-forward (`frac_train_inicial=0.5`) | **0.947 ± 0.027** | 0.914 ± 0.030 |
+| Split único 60/20/20, VAL | 0.932 | 0.898 |
+| Split único 60/20/20, TEST | 0.925 | 0.901 |
+
+El 5-fold reproduce casi exacto lo que había medido la exploración de la
+sección 15.1 (0.947±0.027) — confirma que el hallazgo no era un artefacto
+del script exploratorio. El split único también mejora de forma
+consistente con la 6ta feature (no solo el 5-fold), aunque sigue
+reflejando la dependencia de historial/arranque en frío ya documentada en
+la sección 14 (0.925-0.932 vs. 0.947 del 5-fold, mismo patrón que antes).
+
+**Tabla de búsqueda:** pasa de `[43, 14, 2, 28, 16]` (539,392 combinaciones,
+5 features) a `[42, 11, 2, 26, 16, 29]` (**11,147,136 combinaciones**, 6
+features) — crece ~20x por la dimensión nueva (29 umbrales únicos de
+`frecuencia_categoria_expandida` aprendidos por los árboles). Sigue siendo
+exacta por construcción (mismo mecanismo `bisect_left`), verificado con el
+test bit-exacto real: diferencia máxima < 1×10⁻⁹ sobre las 234,189 filas
+completas de TEST.
+
+**Latencia real medida:** **10.90 µs/decisión** (1,170,945 decisiones,
+`time.perf_counter()`) — sube desde los 9.84 µs de 5 features (una lectura
+más de estado + una dimensión más en la tabla), sigue en el mismo orden que
+Dominio 1 y muy por debajo del presupuesto de industria.
+
+**Tests: 186 en total, todos en verde** (182 anteriores + 4 nuevos; ninguno
+de los 182 tests existentes se modificó para lograrlo — la generalidad de
+`FEATURES_ARBOLES` como lista y de `features`/`umbrales_por_feature` en el
+artefacto absorbió el cambio de 5 a 6 dimensiones sin romper nada).
+
+**No se tocó Dominio 1.** No se hizo commit ni deploy — queda a decisión
+del usuario. SYNAPSE sigue en fase de pruebas.

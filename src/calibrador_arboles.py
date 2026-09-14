@@ -1,7 +1,7 @@
 """Calibrador de árboles (Dominio 2, capa lenta) — entrena el Gradient
 Boosting validado en `docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md` (secciones
-5-7: modelo final `HistGradientBoostingClassifier(max_depth=3,
-learning_rate=0.05, max_iter=200)`, 5 features, calibración isotónica) sobre
+5-7 y 15.1-16: modelo final `HistGradientBoostingClassifier(max_depth=3,
+learning_rate=0.05, max_iter=200)`, 6 features, calibración isotónica) sobre
 `data/raw/sparkov_2013_2026.csv`, y produce el artefacto de
 `artefacto_arboles.py` -- tabla de búsqueda v3 incluida, no los árboles
 crudos (ver esa sección 6, tercera ronda: la tabla es exacta por
@@ -26,10 +26,19 @@ from sklearn.metrics import (
 
 from src.calibrador import DatasetInvalido, split_temporal
 from src.features_recursivas import calcular_features_recursivas_batch
-from src.features_recursivas_cuenta import calcular_features_recursivas_cuenta_batch, calcular_frecuencia_poblacional_categoria
+from src.features_recursivas_cuenta import (
+    calcular_features_recursivas_cuenta_batch,
+    calcular_frecuencia_categoria_expandida_batch,
+    calcular_frecuencia_poblacional_categoria,
+)
 
 VERSION_ARTEFACTO = 1
-FEATURES_ARBOLES = ["amt", "hora", "conteo_ventana_global", "monto_ewma_cuenta", "huella_categoria_cuenta"]
+# 6ta feature agregada en la sección 16 del doc (`frecuencia_categoria_expandida`, mejora
+# validada en la sección 15.1: AUC-PR 0.914+-0.030 -> 0.947+-0.027 en 5-fold walk-forward).
+FEATURES_ARBOLES = [
+    "amt", "hora", "conteo_ventana_global", "monto_ewma_cuenta", "huella_categoria_cuenta",
+    "frecuencia_categoria_expandida",
+]
 COLUMNAS_CRUDAS_REQUERIDAS = {"cc_num", "amt", "unix_time", "category", "is_fraud"}
 
 # Configuración ganadora del Paso 4 del afinamiento (docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md).
@@ -57,13 +66,18 @@ def cargar_dataset(ruta: Path) -> pd.DataFrame:
 
 
 def construir_features(df: pd.DataFrame, frecuencia_categoria: dict) -> pd.DataFrame:
-    """Agrega las 5 features finales sobre TODO el historial continuo (antes
+    """Agrega las 6 features finales sobre TODO el historial continuo (antes
     de partir en train/val/test -- mismo principio que Dominio 1: el estado
-    recursivo no se reinicia en un corte arbitrario)."""
+    recursivo no se reinicia en un corte arbitrario). `n_categorias` para
+    `frecuencia_categoria_expandida` se deriva de `frecuencia_categoria`
+    (aprendida de TRAIN) -- mismo vocabulario de categorías conocidas que ya
+    usa el respaldo poblacional de la huella, sin agregar un campo nuevo al
+    artefacto."""
     df_global = calcular_features_recursivas_batch(df.rename(columns={"amt": "Amount", "unix_time": "Time"}))
     df = df.copy()
     df["conteo_ventana_global"] = df_global["conteo_ventana_global"].to_numpy()
     df = calcular_features_recursivas_cuenta_batch(df, frecuencia_categoria=frecuencia_categoria)
+    df = calcular_frecuencia_categoria_expandida_batch(df, n_categorias=len(frecuencia_categoria))
     return df
 
 
@@ -190,7 +204,7 @@ def _calibrar_detalle(df_train: pd.DataFrame, df_val: pd.DataFrame, frecuencia_c
 def calibrar(df_train: pd.DataFrame, df_val: pd.DataFrame, frecuencia_categoria: dict) -> dict:
     """API pública: entrena y devuelve solo el artefacto de
     `artefacto_arboles.py` (igual que `calibrador.calibrar` de Dominio 1).
-    `df_train`/`df_val` ya deben traer las 5 features (`construir_features`)."""
+    `df_train`/`df_val` ya deben traer las 6 features (`construir_features`)."""
     artefacto, _modelo = _calibrar_detalle(df_train, df_val, frecuencia_categoria)
     return artefacto
 

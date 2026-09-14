@@ -88,6 +88,38 @@ def test_mutar_artefacto_original_no_afecta_al_ejecutor_ya_construido():
     assert resultado["es_sospechosa"] is False  # sigue usando el umbral 0.5 de la copia defensiva
 
 
+ARTEFACTO_6_FEATURES = {
+    "version": 1,
+    "fecha_calibracion": "2026-01-01T00:00:00",
+    "modelo": "gradient_boosting",
+    "features": ["amt", "hora", "conteo_ventana_global", "monto_ewma_cuenta", "huella_categoria_cuenta", "frecuencia_categoria_expandida"],
+    "umbrales_por_feature": {
+        "amt": [], "hora": [], "conteo_ventana_global": [], "monto_ewma_cuenta": [], "huella_categoria_cuenta": [],
+        "frecuencia_categoria_expandida": [0.5],
+    },
+    "tabla_busqueda_forma": [1, 1, 1, 1, 1, 2],
+    "tabla_busqueda_plana": [0.2, 0.8],
+    "calibracion_isotonica": {"x": [0.0, 1.0], "y": [0.0, 1.0]},
+    "umbral_decision": 0.5,
+    "metricas_validacion": {},
+    "frecuencia_poblacional_categoria": {"x": 0.5, "y": 0.5},  # n_categorias = 2
+}
+
+
+def test_decidir_usa_frecuencia_categoria_expandida_en_la_tabla():
+    # n_categorias=2 (frecuencia_poblacional_categoria tiene 2 claves). 1a transaccion de "x":
+    # (0+1)/(0+2)=0.5 -> bisect_left([0.5], 0.5)=0 -> tabla[0]=0.2 -> no sospechosa.
+    # 2a transaccion de "x" (misma categoria repetida): (1+1)/(1+2)=0.667 -> bin 1 -> tabla[1]=0.8 -> sospechosa.
+    ejecutor = EjecutorArboles(artefacto=ARTEFACTO_6_FEATURES)
+    r1 = ejecutor.decidir({"cc_num": "A", "amt": 1.0, "unix_time": 1704122400, "category": "x"})
+    assert r1["score"] == pytest.approx(0.2)
+    assert r1["es_sospechosa"] is False
+
+    r2 = ejecutor.decidir({"cc_num": "A", "amt": 1.0, "unix_time": 1704122401, "category": "x"})
+    assert r2["score"] == pytest.approx(0.8)
+    assert r2["es_sospechosa"] is True
+
+
 def test_estado_por_cuenta_es_independiente_entre_cuentas():
     ejecutor = EjecutorArboles(artefacto=ARTEFACTO)
     # Alimenta la cuenta A con varias transacciones "y" -- no debe afectar a la cuenta B.

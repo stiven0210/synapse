@@ -33,7 +33,9 @@ from src.features_recursivas import LAMBDA_EWMA_MONTO, TiempoFueraDeOrden
 __all__ = [
     "TiempoFueraDeOrden",
     "EstadoRecursivoPorCuenta",
+    "EstadoFrecuenciaCategoriaGlobal",
     "calcular_features_recursivas_cuenta_batch",
+    "calcular_frecuencia_categoria_expandida_batch",
     "calcular_frecuencia_poblacional_categoria",
     "hora_utc",
 ]
@@ -57,6 +59,55 @@ def calcular_frecuencia_poblacional_categoria(df: pd.DataFrame) -> dict:
     artefacto (`frecuencia_poblacional_categoria`), nunca recalcularse en
     caliente ni verse contaminado con datos de val/test."""
     return df["category"].value_counts(normalize=True).to_dict()
+
+
+def calcular_frecuencia_categoria_expandida_batch(df: pd.DataFrame, n_categorias: int) -> pd.DataFrame:
+    """Agrega `frecuencia_categoria_expandida` (sección 15.1 del doc de
+    Dominio 2) -- a diferencia de `huella_categoria_cuenta`, esta es
+    **global** (población completa, no por cuenta) y **expandible**: para
+    cada fila, `(conteo_categoria_hasta_ahora + 1) / (conteo_total_hasta_ahora
+    + n_categorias)` -- Laplace `alpha=1`, causal (solo cuenta filas
+    estrictamente anteriores). Vive en este módulo junto a
+    `calcular_frecuencia_poblacional_categoria` por cohesión (ambas son
+    estadísticos globales de `category`), no porque sea "por cuenta".
+
+    Vectorizado, sin loop: `groupby(...).cumcount()` ya cuenta ocurrencias
+    ESTRICTAMENTE ANTERIORES de la misma categoría en el orden del
+    DataFrame (causal por construcción), y la posición de la fila
+    (`np.arange`) es el total de filas anteriores. `df` debe venir ordenado
+    por `unix_time` (misma responsabilidad del llamador que el resto del
+    módulo). `n_categorias` se aprende UNA VEZ de TRAIN (ver
+    `calibrador_arboles.py`) y nunca se recalcula en caliente -- mismo
+    principio que `frecuencia_poblacional_categoria`."""
+    df = df.copy()
+    conteo_categoria_hasta_ahora = df.groupby("category").cumcount().to_numpy()
+    conteo_total_hasta_ahora = np.arange(len(df))
+    df["frecuencia_categoria_expandida"] = (conteo_categoria_hasta_ahora + 1) / (conteo_total_hasta_ahora + n_categorias)
+    return df
+
+
+class EstadoFrecuenciaCategoriaGlobal:
+    """Contraparte incremental de `calcular_frecuencia_categoria_expandida_batch`
+    -- estado GLOBAL (no por cuenta), O(1) por transacción: un diccionario
+    `categoria -> conteo` + un contador total. `n_categorias` viene del
+    artefacto (aprendido en TRAIN), nunca se recalcula aquí. Verificado en
+    `tests/test_features_recursivas_cuenta.py` que coincide exacto con el
+    modo batch sobre la misma secuencia."""
+
+    __slots__ = ("conteos", "total", "n_categorias")
+
+    def __init__(self, n_categorias: int):
+        self.conteos: dict = {}
+        self.total: int = 0
+        self.n_categorias = n_categorias
+
+    def leer(self, categoria) -> float:
+        conteo_categoria = self.conteos.get(categoria, 0)
+        return (conteo_categoria + 1) / (self.total + self.n_categorias)
+
+    def actualizar(self, categoria) -> None:
+        self.conteos[categoria] = self.conteos.get(categoria, 0) + 1
+        self.total += 1
 
 
 class _EstadoCuenta:
