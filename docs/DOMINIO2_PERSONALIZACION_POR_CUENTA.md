@@ -706,6 +706,85 @@ cerrar:**
    propósito un artefacto con `NaN` en la tabla.
 
 **No se tocó ningún ADR existente** (son de Dominio 1, siguen vigentes tal
-cual). **No se hizo commit ni deploy de nada** -- queda a decisión del
-usuario. **Pendiente sin empezar, sin cambios respecto a antes:** Camino 3
-(dominio IoT) sigue abierto, ver "Pendiente explícito" más arriba.
+cual). **No se hizo commit ni deploy de nada al momento de escribir esta
+sección** -- ver sección 14 para el cierre de la investigación de la brecha
+de AUC-PR, y `docs/CAMINO3_GENERALIZACION_IOT.md` para el cierre de Camino 3
+(dominio IoT), que se completó después de esta sección.
+
+## 14. Investigación de la brecha AUC-PR — causa raíz encontrada: dependencia de historial por cuenta (2026-09-14)
+
+La sección 13 dejó sin investigar por qué el AUC-PR real de producción
+(0.898/0.901) queda por debajo del 0.966±0.013 del Paso 4 del afinamiento.
+Se retomó y se descartaron 4 hipótesis con evidencia directa, hasta
+encontrar una explicación real (no solo "probablemente varianza").
+
+**Primero, se confirmó que la brecha es real, no varianza de un split
+único:** corriendo el mismo walk-forward de 5 folds (`frac_train_inicial=0.5`,
+igual que `validacion_cruzada.py`) sobre el código de producción
+(`src/calibrador_arboles.py`): AUC-PR por fold 0.877, 0.879, 0.931, 0.935,
+0.947 → **media 0.914 ± 0.030**. El split único (0.898/0.901) está en línea
+con este promedio, no es un caso raro.
+
+**4 hipótesis probadas y descartadas, con evidencia directa:**
+
+1. **Calibración isotónica** (el código de producción siempre la aplica antes
+   de medir AUC-PR; el Paso 4 del doc, anterior al Paso 5 de calibración,
+   probablemente medía sobre scores crudos) — medido directamente: la
+   diferencia crudo vs. calibrado es de solo ±0.003-0.005 por fold. No
+   explica la brecha de ~0.05.
+2. **`class_weight="balanced"` vs. `sample_weight` manual** (el doc habla de
+   "balancear con sample_weight", el código de producción usa el parámetro
+   del constructor) — probado en 2 folds: dan resultados **idénticos**
+   (0.8814 y 0.9505 en ambos casos). Sin balanceo, cae a 0.82/0.79 —
+   confirma que el balanceo es necesario y ya está bien aplicado, pero no es
+   la causa de la brecha.
+3. **Fuga de datos en `frecuencia_poblacional_categoria`** (¿el script
+   exploratorio la habrá calculado sobre el dataset completo en vez de solo
+   TRAIN?) — probado deliberadamente con fuga: el resultado con fuga es
+   **igual o levemente peor**, no mejor. Descartada.
+4. **Bug en el cálculo de `huella_categoria_cuenta`** — verificado contra la
+   cifra exacta que el propio doc ya había reportado en la sección 6
+   (tercera ronda): 40 valores únicos, 97.7% de las filas en exactamente
+   1.0. El código de producción reproduce **exactamente** esos números,
+   además de filas totales (1,170,945), fraudes totales (907) y cuentas
+   (99) idénticos al resto del documento. La feature más importante del
+   modelo está bien calculada.
+
+**Causa raíz encontrada — arranque en frío (cold start) por cuenta:**
+variando `frac_train_inicial` (cuánto historial de "calentamiento" tiene
+cada cuenta antes de que arranque el primer fold de validación):
+
+| `frac_train_inicial` | AUC-PR por fold | Media | Desviación |
+|---|---|---|---|
+| 0.5 (arranque en frío, cuentas nuevas) | 0.877 – 0.947 | **0.914** | ±0.030 |
+| 0.6 | 0.869 – 0.964 | **0.926** | ±0.033 |
+| 0.7 (historial amplio, cuentas establecidas) | 0.919 – 0.991 | **0.940** | ±0.026 |
+
+Tendencia **monótona y consistente**: a más historial acumulado por cuenta
+antes de medir, mejor rinde el modelo — coherente con que
+`huella_categoria_cuenta` (la feature de mayor importancia, 0.945) necesita
+historial real de la cuenta para ser informativa; con poco historial, más
+filas caen en el respaldo poblacional (genérico, menos discriminante). No
+cierra el 100% de la brecha contra el 0.966 del doc (probablemente el
+script exploratorio usó un calentamiento aún mayor, o alguna otra diferencia
+metodológica menor no identificada), pero explica la mayor parte de forma
+verificable y con evidencia monótona, no especulativa.
+
+**Esto no es un bug — es un prerrequisito operativo real de Dominio 2, que
+hay que comunicar si el enfoque se usa de verdad:**
+
+- **Cuenta nueva / poco historial:** AUC-PR ≈ 87.7%-94.7% (media 91.4%),
+  precisión 85-95%, recall 82-89% (rango medido en el detalle del split de
+  `frac_train_inicial=0.5`).
+- **Cuenta establecida / historial amplio:** AUC-PR ≈ 91.9%-99.1% (media
+  94.0%).
+
+La personalización por cuenta mejora con el tiempo a medida que la cuenta
+acumula transacciones — el mismo problema de "arranque en frío" que tiene
+cualquier sistema de personalización (recomendadores, scoring de crédito).
+Una cuenta nueva en producción real arrancaría en el escenario más débil.
+
+**Número vigente para reportar de aquí en adelante:** 0.898-0.914 de
+AUC-PR (según el escenario de historial), no 0.966 — ese número del Paso 4
+queda marcado como no reproducido con el código de producción y su origen
+exacto sin confirmar (script exploratorio ya no disponible).
