@@ -41,9 +41,9 @@ def test_incremental_conteo_coincide_con_caso_conocido():
 
 
 def test_batch_e_incremental_coinciden_exactamente_en_secuencia_aleatoria():
-    # La prueba que de verdad importa: ambos modos de cálculo deben producir
-    # los mismos números sobre la misma secuencia -- si divergen, el modelo
-    # calibrado en modo batch no sirve para decisiones en modo incremental
+    # The test that actually matters: both calculation modes must produce
+    # the same numbers over the same sequence -- if they diverge, the model
+    # calibrated in batch mode is useless for incremental-mode decisions
     # (train/serve skew).
     rng = np.random.default_rng(42)
     n = 500
@@ -67,41 +67,41 @@ def test_batch_e_incremental_coinciden_exactamente_en_secuencia_aleatoria():
 
 
 def test_evento_fuera_de_orden_se_rechaza_en_vez_de_corromper_la_ventana():
-    # Bug encontrado en la auditoría: un evento tardío se quedaba atascado en medio de la
-    # ventana para siempre y contaminaba todos los conteos posteriores. Ahora se rechaza.
+    # Bug found in the audit: a late event used to get stuck in the middle of the
+    # window forever and contaminate every count after it. Now it's rejected.
     estado = EstadoRecursivoGlobal(ventana_seg=60.0)
     for t in [100.0, 105.0, 110.0]:
         estado.leer_features(1.0, t)
         estado.actualizar(1.0, t)
 
     with pytest.raises(TiempoFueraDeOrden):
-        estado.leer_features(1.0, 50.0)  # anterior al último procesado (110.0)
+        estado.leer_features(1.0, 50.0)  # earlier than the last one processed (110.0)
 
-    # El estado no debe haberse corrompido: sigue reflejando solo [100, 105, 110].
+    # State must not have been corrupted: it still reflects only [100, 105, 110].
     _, conteo = estado.leer_features(1.0, 115.0)
-    assert conteo == 3  # ventana (55, 115] contiene 100, 105 y 110 -- ninguno salió todavía
+    assert conteo == 3  # window (55, 115] contains 100, 105, and 110 -- none has left yet
 
 
 def test_mismo_tiempo_no_se_considera_fuera_de_orden():
-    # Dos transacciones con el mismo Time (empate) son válidas -- no son "anteriores".
+    # Two transactions with the same Time (a tie) are valid -- they aren't "earlier".
     estado = EstadoRecursivoGlobal(ventana_seg=60.0)
     estado.leer_features(1.0, 100.0)
     estado.actualizar(1.0, 100.0)
-    estado.leer_features(1.0, 100.0)  # no debe lanzar
+    estado.leer_features(1.0, 100.0)  # must not raise
     estado.actualizar(1.0, 100.0)
 
 
 def test_purga_de_ventana_es_o1_no_degrada_con_el_tamano():
-    # tiempos_ventana debe purgarse en O(1) (deque.popleft), no O(n) (list.pop(0)) --
-    # con una ventana muy grande y alta frecuencia, una lista se notaría en el tiempo total.
-    estado = EstadoRecursivoGlobal(ventana_seg=1e9)  # ventana enorme -> nunca se purga, crece sin límite
+    # tiempos_ventana must be purged in O(1) (deque.popleft), not O(n) (list.pop(0)) --
+    # with a very large window and high frequency, a list would show up in the total time.
+    estado = EstadoRecursivoGlobal(ventana_seg=1e9)  # huge window -> never purged, grows unbounded
     n = 20_000
     inicio = time.perf_counter()
     for i in range(n):
         estado.leer_features(1.0, float(i))
         estado.actualizar(1.0, float(i))
     duracion = time.perf_counter() - inicio
-    # Con list.pop(0) el costo por operación crecería linealmente con el tamaño de la ventana
-    # (O(n^2) total); con deque.popleft es O(1) por operación (O(n) total). El umbral es
-    # generoso -- lo que importa es no regresar a comportamiento cuadrático.
+    # With list.pop(0) the per-operation cost would grow linearly with window size
+    # (O(n^2) total); with deque.popleft it's O(1) per operation (O(n) total). The threshold is
+    # generous -- what matters is not regressing back to quadratic behavior.
     assert duracion < 2.0

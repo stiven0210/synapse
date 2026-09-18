@@ -26,7 +26,7 @@ def test_frecuencia_poblacional_categoria_caso_conocido():
 
 
 def test_ewma_cuenta_batch_caso_conocido_dos_cuentas_intercaladas():
-    # cc=A: montos [10,20,30] lambda=0.5 -> causal [10,10,15]; cc=B intercalada no debe afectar A.
+    # cc=A: amounts [10,20,30] lambda=0.5 -> causal [10,10,15]; interleaved cc=B must not affect A.
     df = pd.DataFrame({
         "cc_num": ["A", "B", "A", "A", "B"],
         "amt": [10.0, 100.0, 20.0, 30.0, 200.0],
@@ -39,8 +39,8 @@ def test_ewma_cuenta_batch_caso_conocido_dos_cuentas_intercaladas():
 
 
 def test_huella_categoria_cuenta_usa_respaldo_poblacional_bajo_min_historial():
-    # Con min_historial=5 y solo 2 transacciones previas, se usa la frecuencia poblacional,
-    # no una fracción calculada sobre las 2 disponibles.
+    # With min_historial=5 and only 2 prior transactions, the population frequency is used,
+    # not a fraction computed over the 2 available.
     df = pd.DataFrame({
         "cc_num": ["A"] * 3,
         "amt": [1.0, 1.0, 1.0],
@@ -53,8 +53,8 @@ def test_huella_categoria_cuenta_usa_respaldo_poblacional_bajo_min_historial():
 
 
 def test_huella_categoria_cuenta_caso_conocido_con_historial_suficiente():
-    # Cuenta A: 5 transacciones previas en "grocery","grocery","gas","grocery","grocery" (4/5
-    # grocery), la 6ta transacción es "grocery" -> huella = 4/5 = 0.8.
+    # Account A: 5 prior transactions in "grocery","grocery","gas","grocery","grocery" (4/5
+    # grocery), the 6th transaction is "grocery" -> footprint = 4/5 = 0.8.
     categorias_previas = ["grocery", "grocery", "gas", "grocery", "grocery"]
     df = pd.DataFrame({
         "cc_num": ["A"] * 6,
@@ -67,7 +67,7 @@ def test_huella_categoria_cuenta_caso_conocido_con_historial_suficiente():
 
 
 def test_huella_categoria_cuenta_ventana_desliza_con_maxlen_k():
-    # Con k_huella=2, solo las últimas 2 transacciones cuentan, no todo el historial.
+    # With k_huella=2, only the last 2 transactions count, not the whole history.
     df = pd.DataFrame({
         "cc_num": ["A"] * 4,
         "amt": [1.0] * 4,
@@ -77,7 +77,7 @@ def test_huella_categoria_cuenta_ventana_desliza_con_maxlen_k():
     resultado = calcular_features_recursivas_cuenta_batch(
         df, frecuencia_categoria={"gas": 0.5, "grocery": 0.5}, k_huella=2, min_historial=2
     )
-    # fila 3 (índice 3, categoria "grocery"): ventana de las 2 previas = ["gas","grocery"] -> 1/2 coincide
+    # row 3 (index 3, category "grocery"): window of the previous 2 = ["gas","grocery"] -> 1/2 matches
     assert resultado["huella_categoria_cuenta"].iloc[3] == pytest.approx(0.5)
 
 
@@ -86,7 +86,7 @@ def test_evento_fuera_de_orden_por_cuenta_se_rechaza():
         "cc_num": ["A", "A"],
         "amt": [1.0, 1.0],
         "category": ["x", "x"],
-        "unix_time": [10, 5],  # fuera de orden para la cuenta A
+        "unix_time": [10, 5],  # out of order for account A
     })
     with pytest.raises(TiempoFueraDeOrden):
         calcular_features_recursivas_cuenta_batch(df, frecuencia_categoria={"x": 1.0})
@@ -101,8 +101,8 @@ def test_incremental_estado_por_cuenta_rechaza_fuera_de_orden():
 
 
 def test_batch_e_incremental_coinciden_exactamente_en_secuencia_aleatoria_multi_cuenta():
-    # La prueba que de verdad importa (paridad train/serve): mismos números en batch e
-    # incremental sobre la misma secuencia multi-cuenta con categorías mezcladas.
+    # The test that actually matters (train/serve parity): same numbers in batch and
+    # incremental over the same multi-account sequence with mixed categories.
     rng = np.random.default_rng(7)
     n = 800
     cuentas = rng.choice(["A", "B", "C", "D"], size=n)
@@ -110,7 +110,7 @@ def test_batch_e_incremental_coinciden_exactamente_en_secuencia_aleatoria_multi_
     categorias = rng.choice(categorias_posibles, size=n)
     montos = rng.exponential(50, n)
 
-    # unix_time creciente globalmente garantiza no-decreciente por cuenta también.
+    # Globally increasing unix_time also guarantees non-decreasing per account.
     tiempos = np.arange(n, dtype=float)
 
     df = pd.DataFrame({"cc_num": cuentas, "amt": montos, "category": categorias, "unix_time": tiempos})
@@ -132,19 +132,19 @@ def test_batch_e_incremental_coinciden_exactamente_en_secuencia_aleatoria_multi_
 
 
 def test_frecuencia_categoria_expandida_caso_conocido_a_mano():
-    # n_categorias=2 ("grocery","gas"). Secuencia: grocery,grocery,gas,grocery.
-    # fila 0 (grocery): (0+1)/(0+2) = 0.5
-    # fila 1 (grocery): (1+1)/(1+2) = 2/3
-    # fila 2 (gas):     (0+1)/(2+2) = 0.25
-    # fila 3 (grocery): (2+1)/(3+2) = 0.6
+    # n_categories=2 ("grocery","gas"). Sequence: grocery,grocery,gas,grocery.
+    # row 0 (grocery): (0+1)/(0+2) = 0.5
+    # row 1 (grocery): (1+1)/(1+2) = 2/3
+    # row 2 (gas):     (0+1)/(2+2) = 0.25
+    # row 3 (grocery): (2+1)/(3+2) = 0.6
     df = pd.DataFrame({"category": ["grocery", "grocery", "gas", "grocery"]})
     resultado = calcular_frecuencia_categoria_expandida_batch(df, n_categorias=2)
     assert resultado["frecuencia_categoria_expandida"].tolist() == pytest.approx([0.5, 2 / 3, 0.25, 0.6])
 
 
 def test_estado_frecuencia_categoria_global_incremental_caso_conocido():
-    # Misma secuencia y mismos valores esperados que el test batch de arriba -- verifica
-    # el estado incremental de forma directa e independiente, no solo contra el batch.
+    # Same sequence and same expected values as the batch test above -- verifies
+    # the incremental state directly and independently, not just against batch.
     estado = EstadoFrecuenciaCategoriaGlobal(n_categorias=2)
     valores = []
     for categoria in ["grocery", "grocery", "gas", "grocery"]:
@@ -154,8 +154,8 @@ def test_estado_frecuencia_categoria_global_incremental_caso_conocido():
 
 
 def test_frecuencia_categoria_expandida_batch_e_incremental_coinciden_exactamente():
-    # Paridad train/serve para la feature nueva (sección 15.1/16 del doc) -- misma disciplina
-    # que el resto del módulo: batch e incremental deben coincidir exacto, no aproximado.
+    # Train/serve parity for the new feature (doc section 15.1/16) -- same discipline
+    # as the rest of the module: batch and incremental must match exactly, not approximately.
     rng = np.random.default_rng(11)
     n = 1000
     categorias_posibles = ["grocery", "gas", "entertainment", "misc", "travel"]

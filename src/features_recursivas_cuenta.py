@@ -1,25 +1,24 @@
-"""Features recursivas POR CUENTA (Dominio 2 — Sparkov) — mismo principio de
-`features_recursivas.py` (Dominio 1: fuente única de verdad compartida entre
-Calibrador y Ejecutor, para evitar train/serve skew), pero indexadas por
-`cc_num` en vez de globales. No se toca `features_recursivas.py`: sus
-features (`monto_ewma_global`, `conteo_ventana_global`) se siguen calculando
-tal cual (su API ya es genérica en nombres de argumento, `leer_features(monto,
-tiempo)`/`actualizar(monto, tiempo)`), este módulo solo agrega las dos
-features nuevas de personalización por cuenta validadas en
-`docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md` (sección 3).
+"""PER-ACCOUNT recursive features (Domain 2 — Sparkov) — same principle as
+`features_recursivas.py` (Domain 1: a single source of truth shared
+between Calibrator and Executor, to avoid train/serve skew), but indexed
+by `cc_num` instead of global. `features_recursivas.py` is left untouched:
+its features (`monto_ewma_global`, `conteo_ventana_global`) are still
+computed as-is (its API is already generic in its argument names,
+`leer_features(monto, tiempo)`/`actualizar(monto, tiempo)`); this module
+only adds the two new per-account personalization features validated in
+`docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md` (section 3).
 
-**Por qué el batch reutiliza literalmente la misma clase de estado que el
-modo incremental** (`_EstadoCuenta`, usada tanto dentro de
-`calcular_features_recursivas_cuenta_batch` como dentro de
-`EstadoRecursivoPorCuenta`): la huella de categoría no es vectorizable de
-forma simple (depende de qué categoría específica trae CADA fila, no un
-promedio uniforme), así que en vez de escribir dos implementaciones
-paralelas que podrían divergir, se usa una sola máquina de estado en ambos
-modos — el batch simplemente la recorre en orden sobre todo el historial.
-Aun así, `tests/test_features_recursivas_cuenta.py` verifica la paridad de
-forma explícita e independiente (impulsando `EstadoRecursivoPorCuenta` fila
-por fila y comparando contra el batch), para no depender silenciosamente de
-que ambos caminos compartan código.
+**Why the batch mode literally reuses the same state class as the
+incremental mode** (`_EstadoCuenta`, used both inside
+`calcular_features_recursivas_cuenta_batch` and inside
+`EstadoRecursivoPorCuenta`): the category footprint isn't simply
+vectorizable (it depends on which specific category EACH row carries, not
+a uniform average), so instead of writing two parallel implementations
+that could diverge, a single state machine is used in both modes — batch
+simply walks it in order over the whole history. Even so,
+`tests/test_features_recursivas_cuenta.py` verifies parity explicitly and
+independently (driving `EstadoRecursivoPorCuenta` row by row and comparing
+against batch), so as not to silently rely on both paths sharing code.
 """
 from collections import deque
 from dataclasses import dataclass, field
@@ -40,45 +39,44 @@ __all__ = [
     "hora_utc",
 ]
 
-K_HUELLA_CATEGORIA = 20  # tamaño de la ventana causal por cuenta (por conteo, no por tiempo)
-MIN_HISTORIAL_HUELLA = 5  # por debajo de esto se usa el respaldo poblacional, no un valor inventado
+K_HUELLA_CATEGORIA = 20  # size of the causal per-account window (by count, not time)
+MIN_HISTORIAL_HUELLA = 5  # below this, the population fallback is used, never a made-up value
 
 
 def hora_utc(unix_time) -> int:
-    """Única fuente de verdad de "hora del día" — usada igual en modo batch
-    (vectorizado, ver `calcular_features_recursivas_cuenta_batch`) y en el
-    Ejecutor (fila por fila), en UTC explícito para que ambos modos
-    coincidan sin depender de la zona horaria del sistema donde corra cada
-    uno."""
+    """The single source of truth for "hour of day" — used the same way in
+    batch mode (vectorized, see `calcular_features_recursivas_cuenta_batch`)
+    and in the Executor (row by row), in explicit UTC so both modes agree
+    without depending on the timezone of whichever system runs each one."""
     return datetime.fromtimestamp(int(unix_time), tz=timezone.utc).hour
 
 
 def calcular_frecuencia_poblacional_categoria(df: pd.DataFrame) -> dict:
-    """Frecuencia de cada `category` sobre `df` — pensado para calcularse
-    UNA VEZ sobre TRAIN en `calibrador_arboles.py` y guardarse en el
-    artefacto (`frecuencia_poblacional_categoria`), nunca recalcularse en
-    caliente ni verse contaminado con datos de val/test."""
+    """Frequency of each `category` over `df` — meant to be computed ONCE
+    over TRAIN in `calibrador_arboles.py` and saved into the artifact
+    (`frecuencia_poblacional_categoria`), never recomputed on the hot path
+    or contaminated with val/test data."""
     return df["category"].value_counts(normalize=True).to_dict()
 
 
 def calcular_frecuencia_categoria_expandida_batch(df: pd.DataFrame, n_categorias: int) -> pd.DataFrame:
-    """Agrega `frecuencia_categoria_expandida` (sección 15.1 del doc de
-    Dominio 2) -- a diferencia de `huella_categoria_cuenta`, esta es
-    **global** (población completa, no por cuenta) y **expandible**: para
-    cada fila, `(conteo_categoria_hasta_ahora + 1) / (conteo_total_hasta_ahora
-    + n_categorias)` -- Laplace `alpha=1`, causal (solo cuenta filas
-    estrictamente anteriores). Vive en este módulo junto a
-    `calcular_frecuencia_poblacional_categoria` por cohesión (ambas son
-    estadísticos globales de `category`), no porque sea "por cuenta".
+    """Adds `frecuencia_categoria_expandida` (section 15.1 of the Domain 2
+    doc) -- unlike `huella_categoria_cuenta`, this one is **global** (the
+    whole population, not per account) and **expanding**: for each row,
+    `(conteo_categoria_hasta_ahora + 1) / (conteo_total_hasta_ahora +
+    n_categorias)` -- Laplace `alpha=1`, causal (only counts strictly
+    earlier rows). Lives in this module alongside
+    `calcular_frecuencia_poblacional_categoria` for cohesion (both are
+    global `category` statistics), not because it's "per account".
 
-    Vectorizado, sin loop: `groupby(...).cumcount()` ya cuenta ocurrencias
-    ESTRICTAMENTE ANTERIORES de la misma categoría en el orden del
-    DataFrame (causal por construcción), y la posición de la fila
-    (`np.arange`) es el total de filas anteriores. `df` debe venir ordenado
-    por `unix_time` (misma responsabilidad del llamador que el resto del
-    módulo). `n_categorias` se aprende UNA VEZ de TRAIN (ver
-    `calibrador_arboles.py`) y nunca se recalcula en caliente -- mismo
-    principio que `frecuencia_poblacional_categoria`."""
+    Vectorized, no loop: `groupby(...).cumcount()` already counts
+    STRICTLY EARLIER occurrences of the same category in the DataFrame's
+    order (causal by construction), and the row's position (`np.arange`)
+    is the total number of earlier rows. `df` must already be sorted by
+    `unix_time` (the caller's responsibility, same as the rest of the
+    module). `n_categorias` is learned ONCE from TRAIN (see
+    `calibrador_arboles.py`) and never recomputed on the hot path -- same
+    principle as `frecuencia_poblacional_categoria`."""
     df = df.copy()
     conteo_categoria_hasta_ahora = df.groupby("category").cumcount().to_numpy()
     conteo_total_hasta_ahora = np.arange(len(df))
@@ -87,12 +85,12 @@ def calcular_frecuencia_categoria_expandida_batch(df: pd.DataFrame, n_categorias
 
 
 class EstadoFrecuenciaCategoriaGlobal:
-    """Contraparte incremental de `calcular_frecuencia_categoria_expandida_batch`
-    -- estado GLOBAL (no por cuenta), O(1) por transacción: un diccionario
-    `categoria -> conteo` + un contador total. `n_categorias` viene del
-    artefacto (aprendido en TRAIN), nunca se recalcula aquí. Verificado en
-    `tests/test_features_recursivas_cuenta.py` que coincide exacto con el
-    modo batch sobre la misma secuencia."""
+    """Incremental counterpart of `calcular_frecuencia_categoria_expandida_batch`
+    -- GLOBAL state (not per account), O(1) per transaction: a
+    `categoria -> count` dict + a running total. `n_categorias` comes from
+    the artifact (learned on TRAIN), never recomputed here. Verified in
+    `tests/test_features_recursivas_cuenta.py` to match batch mode exactly
+    over the same sequence."""
 
     __slots__ = ("conteos", "total", "n_categorias")
 
@@ -111,9 +109,9 @@ class EstadoFrecuenciaCategoriaGlobal:
 
 
 class _EstadoCuenta:
-    """Estado compacto de una sola cuenta -- tamaño fijo (`deque(maxlen=k)`),
-    reutilizado sin modificación tanto por el modo batch como por
-    `EstadoRecursivoPorCuenta` (ver docstring del módulo)."""
+    """Compact state for a single account -- fixed size (`deque(maxlen=k)`),
+    reused without modification by both batch mode and
+    `EstadoRecursivoPorCuenta` (see the module docstring)."""
 
     __slots__ = ("monto_ewma", "categorias", "ultimo_tiempo_visto")
 
@@ -125,11 +123,11 @@ class _EstadoCuenta:
     def leer(self, monto: float, categoria, frecuencia_categoria: dict, min_historial: int) -> tuple:
         ewma = monto if self.monto_ewma is None else self.monto_ewma
         if len(self.categorias) < min_historial:
-            # Respaldo poblacional: sin historial suficiente de ESTA cuenta, no hay nada causal
-            # que mirar todavía -- usar la frecuencia aprendida en TRAIN evita inventar una
-            # fracción arbitraria (ej. 0.0 o 1.0) para las primeras transacciones de cada cuenta.
-            # Categoría nunca vista en TRAIN -> 0.0 (sin señal de "inusual para la cuenta", que es
-            # justamente lo que esta feature mide).
+            # Population fallback: with not enough history for THIS account, there's nothing
+            # causal to look at yet -- using the frequency learned on TRAIN avoids making up
+            # an arbitrary fraction (e.g. 0.0 or 1.0) for an account's first few transactions.
+            # A category never seen in TRAIN -> 0.0 (no signal of "unusual for the account",
+            # which is exactly what this feature measures).
             huella = frecuencia_categoria.get(categoria, 0.0)
         else:
             coincidencias = sum(1 for c in self.categorias if c == categoria)
@@ -152,13 +150,13 @@ def calcular_features_recursivas_cuenta_batch(
     k_huella: int = K_HUELLA_CATEGORIA,
     min_historial: int = MIN_HISTORIAL_HUELLA,
 ) -> pd.DataFrame:
-    """Agrega `monto_ewma_cuenta` y `huella_categoria_cuenta` a una copia de
-    `df` (debe venir ordenado por `unix_time` -- responsabilidad del
-    llamador, igual que `calcular_features_recursivas_batch` de Dominio 1).
-    Recorre las filas en orden manteniendo un `_EstadoCuenta` por `cc_num`
-    -- no vectorizado (la huella depende de la categoría específica de cada
-    fila), pero solo corre en tiempo de calibración, nunca en el camino
-    caliente."""
+    """Adds `monto_ewma_cuenta` and `huella_categoria_cuenta` to a copy of
+    `df` (must already be sorted by `unix_time` -- the caller's
+    responsibility, same as Domain 1's `calcular_features_recursivas_batch`).
+    Walks the rows in order, maintaining one `_EstadoCuenta` per `cc_num`
+    -- not vectorized (the footprint depends on each row's specific
+    category), but this only runs at calibration time, never on the hot
+    path."""
     df = df.copy()
     n = len(df)
     cc_nums = df["cc_num"].to_numpy()
@@ -194,13 +192,13 @@ def calcular_features_recursivas_cuenta_batch(
 
 @dataclass
 class EstadoRecursivoPorCuenta:
-    """Contraparte incremental de `calcular_features_recursivas_cuenta_batch`,
-    para uso del Ejecutor -- O(1) por transacción (un solo acceso/actualización
-    de dict + una `deque` de tamaño fijo), nunca reescanea el historial
-    completo. `frecuencia_categoria` viene del artefacto (aprendida en TRAIN
-    por `calibrador_arboles.py`), no se recalcula aquí.
+    """Incremental counterpart of `calcular_features_recursivas_cuenta_batch`,
+    for the Executor's use -- O(1) per transaction (a single dict
+    access/update + one fixed-size `deque`), never rescans the full
+    history. `frecuencia_categoria` comes from the artifact (learned on
+    TRAIN by `calibrador_arboles.py`), never recomputed here.
 
-    No es thread-safe, por el mismo motivo documentado en `ejecutor.py`."""
+    Not thread-safe, for the same reason documented in `ejecutor.py`."""
 
     frecuencia_categoria: dict
     lambda_ewma: float = LAMBDA_EWMA_MONTO
@@ -221,6 +219,6 @@ class EstadoRecursivoPorCuenta:
         return estado.leer(monto, categoria, self.frecuencia_categoria, self.min_historial)
 
     def actualizar(self, cc_num, monto: float, categoria, tiempo) -> None:
-        # leer_features() siempre se llama antes (mismo contrato que EstadoRecursivoGlobal) --
-        # a esta altura la cuenta ya existe en _cuentas.
+        # leer_features() is always called first (same contract as EstadoRecursivoGlobal) --
+        # by this point the account already exists in _cuentas.
         self._cuentas[cc_num].actualizar(monto, categoria, tiempo, self.lambda_ewma)

@@ -1,17 +1,18 @@
-"""Job de triage de escalamientos de Veto — conecta de punta a punta lo que
-`docs/PLAN_DE_TRABAJO.md` señalaba como pendiente: leer la bitácora real,
-filtrar los escalamientos operativos (`SCORE_INVALIDO`/`ERROR_EJECUTOR`),
-invocar `agente_triage.AgenteTriage`, y mostrarle el resultado a un humano.
+"""Veto-escalation triage job — connects end to end what
+`docs/PLAN_DE_TRABAJO.md` flagged as pending: read the real decision log,
+filter the operational escalations (`SCORE_INVALIDO`/`ERROR_EJECUTOR`),
+invoke `agente_triage.AgenteTriage`, and show the result to a human.
 
-Como esta corrida no tiene tráfico real de producción, primero alimenta la
-bitácora con los mismos 2 escenarios de causa real conocida de
-`tests/test_bitacora_decisiones.py` (feature en NaN, feature faltante) —
-así el job tiene algo real que triar en vez de empezar de un archivo vacío.
+Since this run has no real production traffic, it first feeds the
+decision log with the same 2 known-real-cause scenarios from
+`tests/test_bitacora_decisiones.py` (a NaN feature, a missing feature) —
+so the job has something real to triage instead of starting from an empty
+file.
 
-Si `ANTHROPIC_API_KEY` no está configurada, no inventa una llamada falsa:
-reporta explícitamente que no puede triar con un LLM real y cae al reporte
-plano (la entrada de bitácora tal cual, sin hipótesis) — mismo principio de
-degradación con gracia que el circuit breaker del agente.
+If `ANTHROPIC_API_KEY` isn't configured, it doesn't invent a fake call:
+it explicitly reports that it can't triage with a real LLM and falls back
+to the flat report (the log entry as-is, no hypothesis) — the same
+graceful-degradation principle as the agent's circuit breaker.
 """
 import json
 import os
@@ -43,22 +44,22 @@ ARTEFACTO_DEMO = {
 
 
 def _alimentar_bitacora_con_escenarios_de_ejemplo(ciclo: CicloDecision) -> None:
-    """Sin tráfico real de producción, reproduce los mismos 2 escenarios de
-    causa real conocida usados en tests/test_bitacora_decisiones.py, para
-    que el job tenga escalamientos reales que triar."""
+    """With no real production traffic, reproduces the same 2
+    known-real-cause scenarios used in tests/test_bitacora_decisiones.py,
+    so the job has real escalations to triage."""
     escenarios = [
-        {"Amount": float("nan"), "Time": 0.0},  # feature corrupta -> SCORE_INVALIDO
-        {"Time": 1.0},  # falta "Amount" -> ERROR_EJECUTOR
-        {"Amount": 20.0, "Time": 2.0},  # normal -> MODELO, no debe aparecer en el triage
+        {"Amount": float("nan"), "Time": 0.0},  # corrupt feature -> SCORE_INVALIDO
+        {"Time": 1.0},  # missing "Amount" -> ERROR_EJECUTOR
+        {"Amount": 20.0, "Time": 2.0},  # normal -> MODELO, shouldn't show up in triage
     ]
     for transaccion in escenarios:
         registrar_decision(ciclo.decidir(transaccion), transaccion, RUTA_BITACORA)
 
 
 def _armar_contexto() -> dict:
-    """Contexto determinista disponible para groundear al agente -- el
-    reporte de deriva más reciente, si existe (ver scripts/deteccion_deriva.py
-    y scripts/recalibracion_automatica.py)."""
+    """Deterministic context available to ground the agent -- the most
+    recent drift report, if it exists (see scripts/deteccion_deriva.py
+    and scripts/recalibracion_automatica.py)."""
     if RUTA_REPORTE_DERIVA.exists():
         return {"reporte_deriva_reciente": json.loads(RUTA_REPORTE_DERIVA.read_text(encoding="utf-8"))}
     return {"reporte_deriva_reciente": None}
@@ -103,9 +104,9 @@ def main() -> None:
             reporte["resultados"].append({"entrada": entrada, "triage": None, "motivo_sin_triage": str(e)})
             continue
         except Exception as e:
-            # Hallazgo de auditoría: un error real de red/API (timeout, 5xx) no
-            # debe tumbar el script completo -- el triage es asesor, el resto
-            # de escalamientos y el reporte ya generado deben seguir su curso.
+            # Audit finding: a real network/API error (timeout, 5xx) must not
+            # bring down the whole script -- triage is advisory, the rest of
+            # the escalations and the report already generated must keep going.
             print(f"  Sin triage (error del cliente LLM: {type(e).__name__}): {e} -- cayendo al reporte plano.")
             reporte["resultados"].append({"entrada": entrada, "triage": None, "motivo_sin_triage": f"{type(e).__name__}: {e}"})
             continue

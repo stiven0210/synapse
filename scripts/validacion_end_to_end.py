@@ -1,10 +1,10 @@
-"""Fase 5 — Validación end-to-end (docs/PLAN_DE_TRABAJO.md).
+"""Phase 5 — End-to-end validation (docs/PLAN_DE_TRABAJO.md).
 
-Corre el pipeline completo (Calibrador -> Puente -> Ejecutor -> Veto) sobre
-el tramo de PRUEBA (nunca tocado en Fase 1), y compara contra un baseline
-ingenuo sin capa lenta (un umbral fijo sobre Amount, sin calibrar y sin
-features recursivas) — la comparación que demuestra si el patrón de dos
-capas aporta algo medible, no solo elegante.
+Runs the full pipeline (Calibrator -> Bridge -> Executor -> Veto) over the
+TEST slice (never touched in Phase 1), and compares it against a naive
+baseline with no slow layer (a fixed threshold on Amount, uncalibrated and
+with no recursive features) — the comparison that shows whether the
+two-layer pattern delivers something measurable, not just elegant.
 """
 import json
 import time
@@ -31,13 +31,13 @@ def main() -> None:
     train, val, test = split_temporal(df)
 
     artefacto = calibrar(train, val)
-    publicar(artefacto, RUTA_ARTEFACTO)  # única vía real de publicación -- CicloDecision solo lee de aquí
+    publicar(artefacto, RUTA_ARTEFACTO)  # only real publication path -- CicloDecision only reads from here
 
     columnas = artefacto["features"] + ["Time"]
     ciclo = CicloDecision(ruta_artefacto=RUTA_ARTEFACTO)
 
-    # Reconstruye el estado recursivo pasando por train+val en orden (continuidad --
-    # el estado nunca se reinicia en un corte arbitrario, ver Fase 2).
+    # Rebuild the recursive state by going through train+val in order (continuity --
+    # state is never reset at an arbitrary cut, see Phase 2).
     for fila in train[columnas].to_dict("records"):
         ciclo.decidir(fila)
     for fila in val[columnas].to_dict("records"):
@@ -57,8 +57,8 @@ def main() -> None:
         "f1": float(f1_score(y_test, predicciones_synapse, zero_division=0)),
     }
 
-    # Baseline ingenuo: percentil 99.9 de Amount en TRAIN (nunca ve test), sin
-    # calibración estadística real, sin features recursivas, sin capa de veto.
+    # Naive baseline: 99.9th percentile of Amount on TRAIN (never sees test), with
+    # no real statistical calibration, no recursive features, no veto layer.
     umbral_baseline = float(np.percentile(train["Amount"], 99.9))
     predicciones_baseline = (test["Amount"] > umbral_baseline).to_numpy()
     metricas_baseline = {

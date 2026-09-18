@@ -1,15 +1,15 @@
-"""Validación cruzada walk-forward multi-fold — diagnóstico, nunca
-producción. `calibrador.split_temporal()` + `calibrar()` producen EL
-artefacto vigente con un único split train/val/test (solo puede existir un
-artefacto a la vez, eso no cambia). Pero un único split no dice si el
-*proceso* de calibración es estable a través del tiempo, o si el AUC/umbral
-reportado depende de qué corte particular se usó.
+"""Multi-fold walk-forward cross-validation — diagnostic, never
+production. `calibrador.split_temporal()` + `calibrar()` produce THE
+current artifact with a single train/val/test split (only one artifact
+can exist at a time, that doesn't change). But a single split doesn't say
+whether the calibration *process* is stable over time, or whether the
+reported AUC/threshold depends on which particular cut was used.
 
-Walk-forward multi-fold (ventana expansiva, nunca K-fold aleatorio -- eso
-filtraría futuro hacia el pasado en datos con orden temporal real, la misma
-razón por la que `split_temporal` ya es walk-forward) corre la calibración
-varias veces sobre cortes sucesivos y reporta media/desviación estándar del
-AUC y del umbral entre folds.
+Multi-fold walk-forward (expanding window, never random K-fold -- that
+would leak the future into the past on data with real temporal order, the
+same reason `split_temporal` is already walk-forward) runs calibration
+several times over successive cuts and reports the mean/standard deviation
+of AUC and threshold across folds.
 """
 import numpy as np
 import pandas as pd
@@ -18,10 +18,10 @@ from src.calibrador import DatasetInvalido, calibrar
 
 
 def generar_folds_walk_forward(df: pd.DataFrame, n_folds: int, frac_train_inicial: float = 0.5) -> list:
-    """Ventana expansiva: el fold `i` entrena con todo lo anterior al corte
-    `i` y valida con el siguiente bloque -- nunca al revés. `frac_train_inicial`
-    es el tamaño mínimo de entrenamiento antes de empezar a generar folds
-    (no tiene sentido validar con casi nada de historia)."""
+    """Expanding window: fold `i` trains on everything before cut `i` and
+    validates on the next block -- never the other way around.
+    `frac_train_inicial` is the minimum training size before folds start
+    being generated (validating with almost no history makes no sense)."""
     n = len(df)
     inicio_val = int(n * frac_train_inicial)
     tamano_bloque = (n - inicio_val) // n_folds
@@ -40,11 +40,11 @@ def generar_folds_walk_forward(df: pd.DataFrame, n_folds: int, frac_train_inicia
 
 
 def validar_walk_forward_multi_fold(df: pd.DataFrame, n_folds: int = 5, frac_train_inicial: float = 0.5) -> dict:
-    """Corre `calibrar()` sobre cada fold walk-forward y agrega las
-    métricas. Un fold sin casos positivos suficientes (`DatasetInvalido` --
-    el fraude es 0.17% del dataset real, un bloque chico puede no tener
-    ninguno) se registra como fallido en vez de reventar toda la
-    validación; eso también es información real, no un error a ocultar."""
+    """Runs `calibrar()` over each walk-forward fold and aggregates the
+    metrics. A fold without enough positive cases (`DatasetInvalido` --
+    fraud is 0.17% of the real dataset, a small block might have none) is
+    recorded as failed instead of crashing the whole validation; that's
+    also real information, not an error to hide."""
     folds = generar_folds_walk_forward(df, n_folds=n_folds, frac_train_inicial=frac_train_inicial)
 
     exitosos, fallidos = [], []

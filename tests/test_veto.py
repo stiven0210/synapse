@@ -34,7 +34,7 @@ def test_veta_por_score_none():
 
 
 def test_veta_por_monto_absoluto_incluso_si_el_modelo_dice_que_no_es_sospechosa():
-    # El caso que de verdad importa: el veto SOBREESCRIBE al modelo, no al revés.
+    # The case that actually matters: the veto OVERRIDES the model, not the other way around.
     resultado = evaluar({"score": 0.01, "es_sospechosa": False}, {"Amount": 50_000.0})
     assert resultado.es_sospechosa is True
     assert "excede el límite absoluto" in resultado.razon
@@ -42,12 +42,12 @@ def test_veta_por_monto_absoluto_incluso_si_el_modelo_dice_que_no_es_sospechosa(
 
 def test_monto_justo_en_el_limite_no_veta():
     resultado = evaluar({"score": 0.1, "es_sospechosa": False}, {"Amount": 10_000.0}, monto_maximo=10_000.0)
-    assert resultado.es_sospechosa is False  # estrictamente mayor que el límite, no >=
+    assert resultado.es_sospechosa is False  # strictly greater than the limit, not >=
 
 
 def test_veta_por_monto_negativo_extremo():
-    # Bug corregido: antes solo Amount > monto_maximo, sin abs() -- un reembolso/chargeback
-    # fraudulento con monto muy negativo nunca disparaba el veto.
+    # Bug fixed: previously only Amount > monto_maximo, without abs() -- a fraudulent
+    # refund/chargeback with a very negative amount never triggered the veto.
     resultado = evaluar({"score": 0.01, "es_sospechosa": False}, {"Amount": -50_000.0})
     assert resultado.es_sospechosa is True
     assert "excede el límite absoluto" in resultado.razon

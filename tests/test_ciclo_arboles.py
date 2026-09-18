@@ -72,12 +72,12 @@ def test_excepcion_del_ejecutor_escala_a_revision_manual_en_vez_de_propagarse(tm
 
 
 def test_monto_maximo_absoluto_veta_incluso_con_score_bajo(tmp_path):
-    # amt > monto_maximo -- el score de la tabla (bin amt<=100 -> 0.1, no sospechoso) no importa.
+    # amt > monto_maximo -- the table's score (bin amt<=100 -> 0.1, not suspicious) doesn't matter.
     ruta = tmp_path / "artefacto.json"
     publicar(ARTEFACTO, ruta)
     ciclo = CicloDecisionArboles(ruta_artefacto=ruta, monto_maximo=15.0)
 
-    decision = ciclo.decidir(TRANSACCION)  # amt=20.0 > monto_maximo=15.0
+    decision = ciclo.decidir(TRANSACCION)  # amt=20.0 > monto_maximo=15.0 (max amount)
 
     assert decision.es_sospechosa is True
     assert "excede el límite absoluto" in decision.razon
@@ -100,7 +100,7 @@ def test_recargar_artefacto_conserva_el_estado_recursivo(tmp_path):
     publicar(ARTEFACTO, ruta)
     ciclo = CicloDecisionArboles(ruta_artefacto=ruta)
 
-    ciclo.decidir(TRANSACCION)  # alimenta ambos estados (global y por cuenta)
+    ciclo.decidir(TRANSACCION)  # feeds both states (global and per-account)
     estado_global_antes = ciclo._ejecutor.estado_global
     estado_cuenta_antes = ciclo._ejecutor.estado_cuenta
 

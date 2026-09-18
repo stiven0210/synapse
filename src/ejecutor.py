@@ -1,31 +1,30 @@
-"""Ejecutor (capa rápida) — Fase 2. Recibe una transacción, actualiza el
-estado compacto (`features_recursivas.py`) y aplica el artefacto de
-política vigente para decidir. Nunca reentrena, nunca llama a red, nunca
-carga scikit-learn — solo aritmética sobre el estado y los coeficientes ya
-calibrados.
+"""Executor (fast layer) — Phase 2. Receives a transaction, updates the
+compact state (`features_recursivas.py`), and applies the current policy
+artifact to decide. Never retrains, never makes a network call, never
+loads scikit-learn — just arithmetic over the state and the
+already-calibrated coefficients.
 
-**`decidir()` es de bajo nivel — no es la API pública recomendada.** Puede
-devolver un `score` inválido (NaN) sin que nada lo detenga aquí; en Python,
-`nan >= umbral` es `False`, así que usar `resultado["es_sospechosa"]`
-directo trataría un score inválido como "no sospechosa" — exactamente lo
-que `ADR_002` prohíbe. La forma correcta de usar el Ejecutor es a través de
-`ciclo.py::CicloDecision`, que fuerza el paso por `veto.py` (que sí
-distingue NaN) y por el Puente. Este módulo se deja de bajo nivel a
-propósito, para que Calibrador/Ejecutor sigan siendo independientes y
-testeables por separado — la garantía de seguridad vive en `ciclo.py`, no
-aquí.
+**`decidir()` is low-level — it is not the recommended public API.** It
+can return an invalid `score` (NaN) with nothing stopping it here; in
+Python, `nan >= umbral` is `False`, so using `resultado["es_sospechosa"]`
+directly would treat an invalid score as "not suspicious" — exactly what
+`ADR_002` prohibits. The correct way to use the Executor is through
+`ciclo.py::CicloDecision`, which forces the call through `veto.py` (which
+does distinguish NaN) and through the Bridge. This module is deliberately
+left low-level, so the Calibrator/Executor stay independent and
+separately testable — the safety guarantee lives in `ciclo.py`, not here.
 
-**No es thread-safe, por diseño, no por descuido.** `EstadoRecursivoGlobal`
-no tiene ninguna sincronización, y `TiempoFueraDeOrden` asume que las
-transacciones llegan en un único stream secuencial, en orden de `Time` —
-llamar `decidir()` desde múltiples hilos sobre la misma instancia no está
-soportado (investigado con carga real concurrente, ver
-`docs/PLAN_DE_TRABAJO.md`). No hace falta locking: el punto entero de
-decisiones O(1) en microsegundos es que un solo hilo ya cubre volúmenes
-reales de fraude con margen enorme. Si algún día hace falta paralelismo
-real, la forma correcta es particionar por cuenta/entidad (cuando exista
-ese identificador, ver limitación de Fase 0 en `ADR_002`), nunca compartir
-una instancia de `Ejecutor` entre hilos.
+**Not thread-safe, by design, not by oversight.** `EstadoRecursivoGlobal`
+has no synchronization at all, and `TiempoFueraDeOrden` assumes
+transactions arrive on a single sequential stream, in `Time` order —
+calling `decidir()` from multiple threads on the same instance is not
+supported (investigated under real concurrent load, see
+`docs/PLAN_DE_TRABAJO.md`). No locking is needed: the entire point of O(1)
+microsecond decisions is that a single thread already covers real fraud
+volumes with enormous headroom. If real parallelism is ever needed, the
+right approach is to partition by account/entity (once that identifier
+exists, see the Phase 0 limitation in `ADR_002`), never to share a single
+`Ejecutor` instance across threads.
 """
 import copy
 import math
@@ -38,7 +37,7 @@ __all__ = ["ArtefactoInvalido", "Ejecutor", "validar_artefacto"]
 
 
 def _sigmoide(z: float) -> float:
-    """Forma numéricamente estable (evita overflow de exp para z muy negativo)."""
+    """Numerically stable form (avoids exp overflow for very negative z)."""
     if z >= 0:
         return 1.0 / (1.0 + math.exp(-z))
     ez = math.exp(z)
@@ -52,18 +51,18 @@ class Ejecutor:
 
     def __post_init__(self) -> None:
         validar_artefacto(self.artefacto)
-        # Copia defensiva: sin esto, si algo externo muta el mismo dict después de
-        # construir el Ejecutor (logging, una capa de monitoreo, re-serialización) —
-        # incluso poniendo umbral_decision fuera de [0,1] — decidir() seguiría usando
-        # los valores mutados sin volver a validar. Hallazgo de la auditoría.
+        # Defensive copy: without this, if something external mutates the same dict after
+        # the Executor is built (logging, a monitoring layer, re-serialization) —
+        # even setting umbral_decision outside [0,1] — decidir() would keep using
+        # the mutated values without re-validating. An audit finding.
         self.artefacto = copy.deepcopy(self.artefacto)
 
     def decidir(self, transaccion: dict) -> dict:
-        """`transaccion` trae al menos `Amount`, `Time`, y las columnas
-        V1..V28 usadas por el artefacto vigente. O(1) — ninguna operación
-        aquí depende del tamaño del historial. Ver advertencia del módulo:
-        el resultado de esta función NO debe usarse directo, debe pasar
-        por `veto.evaluar()`."""
+        """`transaccion` carries at least `Amount`, `Time`, and the
+        V1..V28 columns the current artifact uses. O(1) — no operation
+        here depends on history size. See the module warning: this
+        function's result must NOT be used directly, it must go through
+        `veto.evaluar()`."""
         monto = transaccion["Amount"]
         tiempo = transaccion["Time"]
         monto_ewma, conteo_ventana = self.estado.leer_features(monto, tiempo)
@@ -77,9 +76,9 @@ class Ejecutor:
             z += coef * valores[nombre]
         score = _sigmoide(z)
 
-        # El estado se actualiza DESPUÉS de leer/decidir -- la transacción actual nunca
-        # se ve a sí misma en su propio contexto reciente (misma semántica causal que
-        # el modo batch usado para calibrar, ver features_recursivas.py).
+        # State is updated AFTER reading/deciding -- the current transaction never
+        # sees itself in its own recent context (same causal semantics as
+        # the batch mode used for calibration, see features_recursivas.py).
         self.estado.actualizar(monto, tiempo)
 
         return {"score": score, "es_sospechosa": score >= self.artefacto["umbral_decision"]}

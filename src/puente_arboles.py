@@ -1,8 +1,9 @@
-"""Puente de Dominio 2 — mismo mecanismo de escritura atómica que `puente.py`
-(Dominio 1), validando contra `artefacto_arboles.py` en vez de `artefacto.py`.
-No se toca `puente.py`: importa `validar_artefacto` de Dominio 1 hardcoded,
-mezclar ambos contratos en un solo módulo invertiría la neutralidad que
-`artefacto.py`/`artefacto_arboles.py` ya logran por separado.
+"""Domain 2's Bridge — same atomic-write mechanism as `puente.py`
+(Domain 1), validating against `artefacto_arboles.py` instead of
+`artefacto.py`. `puente.py` is left untouched: it hardcodes an import of
+Domain 1's `validar_artefacto`, and mixing both contracts into a single
+module would undo the neutrality `artefacto.py`/`artefacto_arboles.py`
+already achieve separately.
 """
 import json
 from pathlib import Path
@@ -11,8 +12,8 @@ from src.artefacto_arboles import validar_artefacto_arboles
 
 
 def publicar(artefacto: dict, ruta: Path) -> None:
-    """Valida contra el contrato de Dominio 2 antes de publicar -- nunca se
-    publica algo que `EjecutorArboles` rechazaría al leerlo."""
+    """Validates against Domain 2's contract before publishing -- never
+    publishes something `EjecutorArboles` would reject on reading it."""
     validar_artefacto_arboles(artefacto)
     ruta.parent.mkdir(parents=True, exist_ok=True)
     ruta_temporal = ruta.with_name(ruta.name + ".tmp")

@@ -1,38 +1,39 @@
-"""Detección de deriva (drift) — responde la pregunta de cuándo hace falta
-recalibrar (`CicloDecision.recargar_artefacto()` es el mecanismo; este
-módulo es la señal que decide *cuándo* usarlo). Compara la distribución de
-una feature en los datos con que se calibró (referencia) contra datos más
-recientes (actual), con dos métricas complementarias:
+"""Drift detection — answers the question of when recalibration is needed
+(`CicloDecision.recargar_artefacto()` is the mechanism; this module is the
+signal that decides *when* to use it). Compares a feature's distribution
+in the data it was calibrated on (reference) against more recent data
+(current), with two complementary metrics:
 
-- **PSI (Population Stability Index)**: cuánto se movió la distribución
-  completa, en bins — umbrales estándar de la industria (0.1 / 0.25).
-- **Test de Kolmogorov-Smirnov**: si la diferencia es estadísticamente
-  significativa, con un p-value — más sensible que PSI a cambios de forma
-  (no solo de nivel), pero sin la escala interpretable de PSI.
+- **PSI (Population Stability Index)**: how much the whole distribution
+  moved, in bins — standard industry thresholds (0.1 / 0.25).
+- **Kolmogorov-Smirnov test**: whether the difference is statistically
+  significant, with a p-value — more sensitive than PSI to shape changes
+  (not just level), but without PSI's interpretable scale.
 
-Se usan las dos porque miden cosas ligeramente distintas y ninguna es
-estrictamente mejor — PSI es el estándar de la industria para decisiones de
-negocio ("recalibrar sí/no"), KS es más sensible como señal temprana.
+Both are used because they measure slightly different things and neither
+is strictly better — PSI is the industry standard for business decisions
+("recalibrate yes/no"), KS is more sensitive as an early signal.
 """
 import numpy as np
 from scipy import stats
 
-UMBRAL_PSI_MODERADO = 0.1  # por debajo: sin deriva significativa (estándar de la industria)
-UMBRAL_PSI_SIGNIFICATIVO = 0.25  # por encima: recalibrar
+UMBRAL_PSI_MODERADO = 0.1  # below: no significant drift (industry standard)
+UMBRAL_PSI_SIGNIFICATIVO = 0.25  # above: recalibrate
 UMBRAL_PVALUE_KS = 0.05
 
 
 def calcular_psi(referencia: np.ndarray, actual: np.ndarray, n_bins: int = 10) -> float:
-    """PSI = Σ (pct_actual - pct_ref) · ln(pct_actual / pct_ref). Los bins
-    se fijan por los percentiles de `referencia`, no de `actual` — el PSI
-    mide cuánto se movió `actual` respecto a la referencia, no al revés."""
+    """PSI = Σ (pct_actual - pct_ref) · ln(pct_actual / pct_ref). Bins are
+    fixed by `referencia`'s percentiles, not `actual`'s — PSI measures how
+    much `actual` moved relative to the reference, not the other way
+    around."""
     referencia = np.asarray(referencia, dtype=float)
     actual = np.asarray(actual, dtype=float)
 
     percentiles = np.linspace(0, 100, n_bins + 1)
     bordes = np.unique(np.percentile(referencia, percentiles))
     if len(bordes) < 2:
-        return 0.0  # referencia sin variación -- no se puede medir deriva
+        return 0.0  # reference has no variation -- drift can't be measured
 
     bordes = bordes.copy()
     bordes[0] = -np.inf
@@ -44,8 +45,8 @@ def calcular_psi(referencia: np.ndarray, actual: np.ndarray, n_bins: int = 10) -
     pct_ref = conteo_ref / len(referencia)
     pct_actual = conteo_actual / len(actual)
 
-    # Un bin vacío en cualquiera de los dos lados se trata como una fracción mínima (no 0)
-    # para evitar log(0)/división por 0 -- práctica estándar del cálculo de PSI.
+    # An empty bin on either side is treated as a minimal fraction (not 0)
+    # to avoid log(0)/division by 0 -- standard practice for PSI calculation.
     epsilon = 1e-4
     pct_ref = np.where(pct_ref == 0, epsilon, pct_ref)
     pct_actual = np.where(pct_actual == 0, epsilon, pct_actual)
@@ -67,20 +68,19 @@ def evaluar_ks(referencia: np.ndarray, actual: np.ndarray) -> dict:
 
 
 def evaluar_deriva_score(scores_referencia: np.ndarray, scores_actual: np.ndarray, n_bins: int = 10) -> dict:
-    """Igual que `evaluar_deriva()`, pero sobre el score de salida del
-    modelo -- no una feature de entrada. Complementa, no reemplaza, el
-    monitoreo por feature: el score agrega el efecto neto de deriva en
-    TODAS las features a través del modelo en un solo número, así que
-    puede moverse de forma significativa aunque ninguna feature individual
-    cruce sola el umbral de PSI (el caso que el monitoreo por feature, por
-    diseño, no puede ver)."""
+    """Same as `evaluar_deriva()`, but on the model's output score -- not
+    an input feature. Complements, doesn't replace, per-feature
+    monitoring: the score aggregates the net drift effect across ALL
+    features through the model into a single number, so it can move
+    significantly even if no individual feature alone crosses the PSI
+    threshold (the case per-feature monitoring, by design, can't see)."""
     psi = calcular_psi(scores_referencia, scores_actual, n_bins=n_bins)
     return {"psi": psi, "psi_interpretacion": interpretar_psi(psi), "ks": evaluar_ks(scores_referencia, scores_actual)}
 
 
 def evaluar_deriva(df_referencia, df_actual, columnas: list, n_bins: int = 10) -> dict:
-    """Corre PSI + KS sobre cada columna dada, devuelve un reporte por
-    columna y un resumen de cuántas muestran deriva significativa."""
+    """Runs PSI + KS on each given column, returns a per-column report and
+    a summary of how many show significant drift."""
     reporte = {}
     for col in columnas:
         psi = calcular_psi(df_referencia[col].to_numpy(), df_actual[col].to_numpy(), n_bins=n_bins)
@@ -97,21 +97,21 @@ def evaluar_deriva(df_referencia, df_actual, columnas: list, n_bins: int = 10) -
 
 
 def ponderar_deriva_por_coeficiente(reporte_deriva: dict, features: list, coeficientes: list) -> dict:
-    """Enriquece el reporte de `evaluar_deriva()` con la magnitud del
-    coeficiente de cada feature en el artefacto vigente -- ayuda a
-    distinguir deriva en una feature que el modelo realmente usa (coeficiente
-    grande) de deriva en una que casi no importa (coeficiente cerca de 0).
+    """Enriches `evaluar_deriva()`'s report with the magnitude of each
+    feature's coefficient in the current artifact -- helps distinguish
+    drift in a feature the model actually uses (large coefficient) from
+    drift in one that barely matters (coefficient near 0).
 
-    **No cambia `recomendacion_recalibrar`** (sigue siendo el estándar de
-    industria de PSI > 0.25 por feature, sin alterar) -- introducir un
-    umbral nuevo sobre la contribución ponderada sería un parámetro no
-    justificado empíricamente (ver `CLAUDE.md`: "ningún parámetro no
-    justificado tiene valor por defecto silencioso"). Esto es información
-    adicional para que un humano juzgue si la recalibración recomendada la
-    empujan features estructuralmente importantes o ruido en features que
-    el modelo casi no pesa -- `contribucion_ponderada_features_con_deriva`
-    en [0, 1]: qué fracción del peso total del modelo (suma de |coeficiente|)
-    está en las features que sí muestran deriva significativa."""
+    **Doesn't change `recomendacion_recalibrar`** (still the industry
+    standard of PSI > 0.25 per feature, unaltered) -- introducing a new
+    threshold on the weighted contribution would be an empirically
+    unjustified parameter (see `CLAUDE.md`: "no unjustified parameter gets
+    a silent default value"). This is additional information for a human
+    to judge whether the recommended recalibration is being driven by
+    structurally important features or noise in features the model barely
+    weighs -- `contribucion_ponderada_features_con_deriva` in [0, 1]: what
+    fraction of the model's total weight (sum of |coefficient|) sits in
+    the features that do show significant drift."""
     coef_por_feature = dict(zip(features, coeficientes))
     peso_total = sum(abs(c) for c in coeficientes)
 

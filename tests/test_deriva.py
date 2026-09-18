@@ -17,22 +17,22 @@ def test_psi_misma_distribucion_es_cercano_a_cero():
 def test_psi_deriva_fuerte_supera_el_umbral_significativo():
     rng = np.random.default_rng(0)
     ref = rng.normal(0, 1, 5000)
-    drift_fuerte = rng.normal(5, 1, 5000)  # desplazamiento de 5 desviaciones estándar
+    drift_fuerte = rng.normal(5, 1, 5000)  # shift of 5 standard deviations
     psi = calcular_psi(ref, drift_fuerte)
     assert psi > 0.25
     assert interpretar_psi(psi) == "deriva_significativa_recalibrar"
 
 
 def test_psi_referencia_sin_variacion_devuelve_cero_sin_error():
-    ref = np.full(100, 5.0)  # todos los valores iguales -- percentiles degenerados
+    ref = np.full(100, 5.0)  # all values equal -- degenerate percentiles
     actual = np.array([1.0, 2.0, 3.0])
     assert calcular_psi(ref, actual) == 0.0
 
 
 def test_psi_es_simetrico_en_deteccion_pero_no_en_valor():
-    # PSI(ref, actual) no tiene que ser igual a PSI(actual, ref) -- los bins se fijan
-    # sobre la referencia -- pero ambos deben detectar deriva significativa en la misma
-    # situación de desplazamiento fuerte.
+    # PSI(ref, actual) doesn't have to equal PSI(actual, ref) -- the bins are fixed
+    # over the reference -- but both must detect significant drift in the same
+    # strong-shift situation.
     rng = np.random.default_rng(1)
     a = rng.normal(0, 1, 3000)
     b = rng.normal(4, 1, 3000)
@@ -61,7 +61,7 @@ def test_ks_deriva_fuerte_marca_deriva():
 def test_evaluar_deriva_reporta_por_columna_y_recomienda_recalibrar():
     rng = np.random.default_rng(2)
     df_ref = pd.DataFrame({"a": rng.normal(0, 1, 2000), "b": rng.normal(0, 1, 2000)})
-    df_actual = pd.DataFrame({"a": rng.normal(0, 1, 2000), "b": rng.normal(6, 1, 2000)})  # solo "b" derivó
+    df_actual = pd.DataFrame({"a": rng.normal(0, 1, 2000), "b": rng.normal(6, 1, 2000)})  # only "b" drifted
 
     reporte = evaluar_deriva(df_ref, df_actual, columnas=["a", "b"])
 
@@ -94,7 +94,7 @@ def test_evaluar_deriva_score_misma_distribucion_no_recomienda_recalibrar():
 def test_evaluar_deriva_score_con_deriva_fuerte_la_detecta():
     rng = np.random.default_rng(0)
     scores_ref = rng.uniform(0, 0.3, 3000)
-    scores_actual = rng.uniform(0.6, 1.0, 3000)  # el modelo empezó a marcar todo como sospechoso
+    scores_actual = rng.uniform(0.6, 1.0, 3000)  # the model started flagging everything as suspicious
 
     reporte = evaluar_deriva_score(scores_ref, scores_actual)
 
@@ -103,12 +103,12 @@ def test_evaluar_deriva_score_con_deriva_fuerte_la_detecta():
 
 
 def test_evaluar_deriva_score_detecta_deriva_que_ninguna_feature_individual_muestra_sola():
-    # El caso que justifica monitorear el score además de cada feature: un
-    # shift pequeño (0.11 desviaciones estándar) repartido en 30 features
-    # deja a CADA feature muy por debajo del umbral de PSI -- pero el score
-    # combinado (que agrega el efecto neto de las 30) sí cruza el umbral.
-    # Parámetros verificados a mano antes de escribir el test, no ajustados
-    # después para que "diera bien".
+    # The case that justifies monitoring the score in addition to each feature: a
+    # small shift (0.11 standard deviations) spread across 30 features
+    # leaves EACH feature far below the PSI threshold -- but the combined
+    # score (which aggregates the net effect of all 30) does cross the threshold.
+    # Parameters verified by hand before writing the test, not tuned
+    # afterward to "make it pass".
     rng = np.random.default_rng(11)
     n, k, delta = 5000, 30, 0.11
     ref = rng.normal(0, 1, (n, k))
@@ -133,16 +133,16 @@ def test_ponderar_deriva_por_coeficiente_calcula_contribucion_ponderada():
         "c": rng.normal(0, 1, 2000),
     })
     df_actual = pd.DataFrame({
-        "a": rng.normal(6, 1, 2000),  # deriva fuerte
-        "b": rng.normal(0, 1, 2000),  # sin deriva
-        "c": rng.normal(6, 1, 2000),  # deriva fuerte
+        "a": rng.normal(6, 1, 2000),  # strong drift
+        "b": rng.normal(0, 1, 2000),  # no drift
+        "c": rng.normal(6, 1, 2000),  # strong drift
     })
     reporte = evaluar_deriva(df_ref, df_actual, columnas=["a", "b", "c"])
     assert reporte["por_feature"]["a"]["psi_interpretacion"] == "deriva_significativa_recalibrar"
     assert reporte["por_feature"]["b"]["psi_interpretacion"] == "sin_deriva_significativa"
     assert reporte["por_feature"]["c"]["psi_interpretacion"] == "deriva_significativa_recalibrar"
 
-    # peso_total = |3| + |1| + |0| = 4 -- "a" y "c" derivaron, pesan 3+0=3 -> 3/4 = 0.75
+    # peso_total = |3| + |1| + |0| = 4 -- "a" and "c" drifted, weighing 3+0=3 -> 3/4 = 0.75
     ponderado = ponderar_deriva_por_coeficiente(reporte, features=["a", "b", "c"], coeficientes=[3.0, 1.0, 0.0])
 
     assert ponderado["contribucion_ponderada_features_con_deriva"] == pytest.approx(0.75)
@@ -178,11 +178,11 @@ def test_ponderar_deriva_feature_sin_coeficiente_conocido_no_cuenta_en_contribuc
     rng = np.random.default_rng(5)
     df_ref = pd.DataFrame({"a": rng.normal(0, 1, 2000), "d": rng.normal(0, 1, 2000)})
     df_actual = pd.DataFrame({"a": rng.normal(0, 1, 2000), "d": rng.normal(6, 1, 2000)})
-    reporte = evaluar_deriva(df_ref, df_actual, columnas=["a", "d"])  # "d" derivó
+    reporte = evaluar_deriva(df_ref, df_actual, columnas=["a", "d"])  # "d" drifted
 
-    # el artefacto vigente solo conoce "a" -- "d" no está en features/coeficientes
+    # the current artifact only knows "a" -- "d" isn't in features/coeficientes
     ponderado = ponderar_deriva_por_coeficiente(reporte, features=["a"], coeficientes=[2.0])
 
     assert ponderado["por_feature"]["d"]["coeficiente"] is None
     assert ponderado["por_feature"]["d"]["peso_relativo_en_score"] is None
-    assert ponderado["contribucion_ponderada_features_con_deriva"] == 0.0  # "d" no pesa nada en el score vigente
+    assert ponderado["contribucion_ponderada_features_con_deriva"] == 0.0  # "d" carries no weight in the current score

@@ -1,12 +1,12 @@
-"""Compara el umbral de F1 (el que usa `calibrar()`, producción) contra el
-umbral por costo esperado (`src/costo_decision.py`, solo análisis) sobre el
-tramo de prueba real.
+"""Compares the F1 threshold (the one `calibrar()` uses, production) against
+the expected-cost threshold (`src/costo_decision.py`, analysis only) over
+the real test slice.
 
-**`COSTO_FALSO_POSITIVO_PLACEHOLDER` es un supuesto ilustrativo, no un dato
-de negocio real** -- este proyecto no tiene forma de conocer el costo real
-de fricción/revisión de bloquear una transacción legítima. Sustituir este
-número por el que de verdad aplique antes de tomar cualquier decisión con
-esto.
+**`COSTO_FALSO_POSITIVO_PLACEHOLDER` is an illustrative assumption, not a
+real business figure** -- this project has no way of knowing the real
+friction/review cost of blocking a legitimate transaction. Replace this
+number with the one that actually applies before making any decision with
+this.
 """
 import json
 from pathlib import Path
@@ -20,7 +20,7 @@ from src.costo_decision import costo_esperado, mejor_umbral_por_costo
 RAIZ = Path(__file__).resolve().parent.parent
 RUTA_DATASET = RAIZ / "data" / "raw" / "creditcard.csv"
 
-COSTO_FALSO_POSITIVO_PLACEHOLDER = 5.0  # SUPUESTO ilustrativo -- reemplazar con un dato de negocio real
+COSTO_FALSO_POSITIVO_PLACEHOLDER = 5.0  # Illustrative ASSUMPTION -- replace with a real business figure
 
 
 def _metricas(y_true, y_pred) -> dict:

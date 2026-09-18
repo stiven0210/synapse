@@ -34,7 +34,7 @@ ARTEFACTO = {
 
 def test_interpolar_isotonica_caso_conocido():
     xs, ys = [0.0, 0.5, 1.0], [0.0, 0.8, 1.0]
-    assert _interpolar_isotonica(0.25, xs, ys) == pytest.approx(0.4)  # punto medio entre 0.0 y 0.8
+    assert _interpolar_isotonica(0.25, xs, ys) == pytest.approx(0.4)  # midpoint between 0.0 and 0.8
 
 
 def test_interpolar_isotonica_clampa_fuera_de_rango():
@@ -46,7 +46,7 @@ def test_interpolar_isotonica_clampa_fuera_de_rango():
 def test_interpolar_isotonica_coincide_con_np_interp_en_secuencia_aleatoria():
     rng = np.random.default_rng(1)
     xs = np.sort(rng.uniform(0, 1, 30)).tolist()
-    ys = np.sort(rng.uniform(0, 1, 30)).tolist()  # monótona no decreciente, como una isotónica real
+    ys = np.sort(rng.uniform(0, 1, 30)).tolist()  # non-decreasing monotonic, like a real isotonic curve
     puntos = rng.uniform(-1, 2, 200)
     esperado = np.interp(puntos, xs, ys)
     obtenido = [_interpolar_isotonica(float(p), xs, ys) for p in puntos]
@@ -68,11 +68,11 @@ def test_decidir_bin_alto_es_sospechosa():
 
 
 def test_score_nan_no_se_guarda_en_ejecutor_queda_para_veto():
-    # Igual que Ejecutor de Dominio 1: decidir() no protege contra NaN, es responsabilidad de Veto.
+    # Same as the Domain 1 Executor: decidir() doesn't guard against NaN, that's Veto's responsibility.
     artefacto_roto = {**ARTEFACTO, "tabla_busqueda_plana": [float("nan"), 0.9]}
     ejecutor = EjecutorArboles(artefacto=artefacto_roto)
     resultado = ejecutor.decidir({"cc_num": "A", "amt": 20.0, "unix_time": 1704122400, "category": "x"})
-    assert resultado["es_sospechosa"] is False  # nan >= umbral es False -- por diseño, ver docstring
+    assert resultado["es_sospechosa"] is False  # nan >= threshold is False -- by design, see docstring
 
 
 def test_construir_ejecutor_valida_el_artefacto():
@@ -83,9 +83,9 @@ def test_construir_ejecutor_valida_el_artefacto():
 def test_mutar_artefacto_original_no_afecta_al_ejecutor_ya_construido():
     artefacto = dict(ARTEFACTO)
     ejecutor = EjecutorArboles(artefacto=artefacto)
-    artefacto["umbral_decision"] = 0.0  # muta el dict original después de construir
+    artefacto["umbral_decision"] = 0.0  # mutates the original dict after construction
     resultado = ejecutor.decidir({"cc_num": "A", "amt": 20.0, "unix_time": 1704122400, "category": "x"})
-    assert resultado["es_sospechosa"] is False  # sigue usando el umbral 0.5 de la copia defensiva
+    assert resultado["es_sospechosa"] is False  # still uses the 0.5 threshold from the defensive copy
 
 
 ARTEFACTO_6_FEATURES = {
@@ -102,14 +102,14 @@ ARTEFACTO_6_FEATURES = {
     "calibracion_isotonica": {"x": [0.0, 1.0], "y": [0.0, 1.0]},
     "umbral_decision": 0.5,
     "metricas_validacion": {},
-    "frecuencia_poblacional_categoria": {"x": 0.5, "y": 0.5},  # n_categorias = 2
+    "frecuencia_poblacional_categoria": {"x": 0.5, "y": 0.5},  # n_categories = 2
 }
 
 
 def test_decidir_usa_frecuencia_categoria_expandida_en_la_tabla():
-    # n_categorias=2 (frecuencia_poblacional_categoria tiene 2 claves). 1a transaccion de "x":
-    # (0+1)/(0+2)=0.5 -> bisect_left([0.5], 0.5)=0 -> tabla[0]=0.2 -> no sospechosa.
-    # 2a transaccion de "x" (misma categoria repetida): (1+1)/(1+2)=0.667 -> bin 1 -> tabla[1]=0.8 -> sospechosa.
+    # n_categories=2 (frecuencia_poblacional_categoria has 2 keys). 1st transaction of "x":
+    # (0+1)/(0+2)=0.5 -> bisect_left([0.5], 0.5)=0 -> table[0]=0.2 -> not suspicious.
+    # 2nd transaction of "x" (same category repeated): (1+1)/(1+2)=0.667 -> bin 1 -> table[1]=0.8 -> suspicious.
     ejecutor = EjecutorArboles(artefacto=ARTEFACTO_6_FEATURES)
     r1 = ejecutor.decidir({"cc_num": "A", "amt": 1.0, "unix_time": 1704122400, "category": "x"})
     assert r1["score"] == pytest.approx(0.2)
@@ -122,15 +122,15 @@ def test_decidir_usa_frecuencia_categoria_expandida_en_la_tabla():
 
 def test_estado_por_cuenta_es_independiente_entre_cuentas():
     ejecutor = EjecutorArboles(artefacto=ARTEFACTO)
-    # Alimenta la cuenta A con varias transacciones "y" -- no debe afectar a la cuenta B.
+    # Feeds account A with several "y" transactions -- must not affect account B.
     for t in range(6):
         ejecutor.decidir({"cc_num": "A", "amt": 1.0, "unix_time": 1704122400 + t, "category": "y"})
-    # EstadoRecursivoGlobal es un único reloj global compartido por todas las cuentas -- el
-    # tiempo debe seguir avanzando, no retroceder, aunque la cuenta cambie.
+    # EstadoRecursivoGlobal is a single global clock shared by all accounts -- time
+    # must keep advancing, never go backward, even when the account changes.
     r_b = ejecutor.decidir({"cc_num": "B", "amt": 1.0, "unix_time": 1704122400 + 6, "category": "y"})
-    # B es su primera transacción -- huella_categoria_cuenta usa respaldo poblacional (frecuencia_categoria["x"]=1.0,
-    # "y" no está en frecuencia_categoria -> 0.0), no el historial de A.
-    assert r_b["score"] in (0.1, 0.9)  # solo confirma que no lanzó ni se corrompió por el estado de A
+    # B is its first transaction -- huella_categoria_cuenta falls back to the population frequency
+    # (frecuencia_categoria["x"]=1.0, "y" isn't in frecuencia_categoria -> 0.0), not A's history.
+    assert r_b["score"] in (0.1, 0.9)  # only confirms it didn't raise or get corrupted by A's state
 
 
 @pytest.fixture(scope="module")
@@ -141,10 +141,10 @@ def pipeline_real():
 
 
 def test_tabla_busqueda_es_bit_exacta_contra_predict_proba_real(pipeline_real):
-    # La prueba que de verdad importa (ver skill two-speed-decision): replay completo desde el
-    # inicio del historial (train+val+test en orden), NO solo el tramo de test -- de lo
-    # contrario el estado recursivo por cuenta/global arrancaría vacío en vez de con la
-    # historia real, y los números no coincidirían con los que sí calculó el modo batch.
+    # The test that actually matters (see the two-speed-decision skill): full replay from the
+    # start of history (train+val+test in order), NOT just the test split -- otherwise
+    # the per-account/global recursive state would start empty instead of with the
+    # real history, and the numbers wouldn't match the ones batch mode actually computed.
     artefacto = pipeline_real["artefacto"]
     modelo = pipeline_real["modelo"]
     df_test = pipeline_real["df_test"]
@@ -169,14 +169,14 @@ def test_tabla_busqueda_es_bit_exacta_contra_predict_proba_real(pipeline_real):
     scores_test_reales = np.interp(scores_crudos_reales, xs, ys)
 
     diff = np.abs(scores_test_ejecutor - scores_test_reales)
-    assert diff.max() < 1e-9  # bit-exacto salvo ruido de punto flotante -- ver sección 6 del doc
+    assert diff.max() < 1e-9  # bit-exact except for floating-point noise -- see doc section 6
     assert diff.mean() < 1e-12
 
 
 def test_latencia_real_medida_con_perf_counter(pipeline_real):
-    # Medida real, nunca estimada (disciplina de la skill two-speed-decision) -- misma
-    # metodología que scripts/validacion_end_to_end.py: pre-construir la lista de transacciones,
-    # medir solo el tiempo de decidir().
+    # Real measurement, never estimated (two-speed-decision skill discipline) -- same
+    # methodology as scripts/validacion_end_to_end.py: pre-build the list of transactions,
+    # only measure decidir()'s time.
     df_full = pd.concat([pipeline_real["df_train"], pipeline_real["df_val"], pipeline_real["df_test"]], ignore_index=True)
     columnas = ["cc_num", "amt", "unix_time", "category"]
     filas = df_full[columnas].to_dict("records")
@@ -192,6 +192,6 @@ def test_latencia_real_medida_con_perf_counter(pipeline_real):
 
     us_por_decision = duracion / len(filas) * 1e6
     print(f"\nLatencia real EjecutorArboles: {us_por_decision:.2f} µs/decisión sobre {len(filas)} transacciones")
-    # Generoso a propósito -- el número real se reporta en docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md,
-    # este assert solo evita una regresión catastrófica (ej. volver a recorrer árboles en caliente).
+    # Deliberately generous -- the real number is reported in docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md,
+    # this assert only guards against a catastrophic regression (e.g. going back to walking trees on the hot path).
     assert us_por_decision < 100.0

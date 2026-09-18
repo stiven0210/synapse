@@ -1,23 +1,23 @@
-"""CicloDecision — único punto de entrada sancionado para tomar una
-decisión real. Cierra 3 hallazgos críticos de la auditoría (ver
+"""CicloDecision — the one sanctioned entry point for making a real
+decision. Closes 3 critical audit findings (see
 `docs/PLAN_DE_TRABAJO.md`):
 
-1. **Nada impedía construir un `Ejecutor` con un artefacto que nunca pasó
-   por `puente.leer_vigente()`** — `Ejecutor(artefacto=calibrar(...))`
-   directo era perfectamente posible, sin la validación ni la escritura
-   atómica del Puente. `CicloDecision` solo se construye desde una ruta de
-   archivo — el artefacto SIEMPRE pasa por el Puente.
-2. **Nada obligaba a que el resultado de `Ejecutor.decidir()` pasara por
-   `veto.evaluar()`** — y como `nan >= umbral` es `False` en Python, un
-   score inválido se interpretaba como "no sospechosa" si alguien usaba
-   `Ejecutor.decidir()` directo. `CicloDecision.decidir()` siempre aplica
-   el Veto — no expone ninguna forma de saltárselo.
-3. **"Revisar manualmente" por artefacto ausente/corrupto (ADR_002,
-   invariante 1) no existía como código** — solo como una excepción sin
-   capturar que tumbaba el proceso. Aquí sí se captura y se convierte en
-   una `DecisionFinal` real, con degradación con gracia: si la recarga
-   falla, se seguye operando con el último artefacto válido conocido en
-   vez de caerse.
+1. **Nothing stopped an `Ejecutor` from being built with an artifact that
+   never went through `puente.leer_vigente()`** — a direct
+   `Ejecutor(artefacto=calibrar(...))` was perfectly possible, skipping
+   the Bridge's validation and atomic write. `CicloDecision` can only be
+   built from a file path — the artifact ALWAYS goes through the Bridge.
+2. **Nothing forced `Ejecutor.decidir()`'s result through
+   `veto.evaluar()`** — and since `nan >= umbral` is `False` in Python, an
+   invalid score was interpreted as "not suspicious" if someone used
+   `Ejecutor.decidir()` directly. `CicloDecision.decidir()` always applies
+   the Veto — it exposes no way to skip it.
+3. **"Escalate for manual review" on a missing/corrupt artifact (ADR_002,
+   invariant 1) didn't exist as code** — only as an uncaught exception
+   that crashed the process. Here it's actually caught and turned into a
+   real `DecisionFinal`, with graceful degradation: if the reload fails,
+   it keeps operating on the last known valid artifact instead of
+   crashing.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,15 +35,16 @@ class CicloDecision:
     _ejecutor: Ejecutor = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        artefacto = leer_vigente(self.ruta_artefacto)  # puede lanzar -- primera carga sin fallback
+        artefacto = leer_vigente(self.ruta_artefacto)  # can raise -- first load has no fallback
         self._ejecutor = Ejecutor(artefacto=artefacto)
 
     def recargar_artefacto(self) -> bool:
-        """Intenta recargar el artefacto vigente desde el Puente,
-        conservando el estado recursivo acumulado (no se pierde historial
-        por recalibrar). Si falla (archivo ausente, corrupto, o inválido),
-        **no reemplaza** el Ejecutor actual — sigue operando con el último
-        artefacto válido conocido. Devuelve si la recarga tuvo éxito."""
+        """Tries to reload the current artifact from the Bridge, preserving
+        the accumulated recursive state (no history is lost from
+        recalibrating). If it fails (missing file, corrupt, or invalid),
+        it **does not replace** the current Executor — it keeps operating
+        on the last known valid artifact. Returns whether the reload
+        succeeded."""
         try:
             artefacto_nuevo = leer_vigente(self.ruta_artefacto)
         except (FileNotFoundError, ArtefactoInvalido, ValueError):
@@ -52,10 +53,10 @@ class CicloDecision:
         return True
 
     def decidir(self, transaccion: dict) -> DecisionFinal:
-        """Único método para tomar una decisión real. Cualquier fallo del
-        Ejecutor (score inválido, excepción inesperada) se captura aquí y
-        se convierte en escalar a revisión manual — nunca se propaga sin
-        capturar hacia el llamador."""
+        """The one method for making a real decision. Any Executor failure
+        (invalid score, unexpected exception) is caught here and turned
+        into an escalation for manual review — it's never propagated
+        uncaught to the caller."""
         try:
             resultado = self._ejecutor.decidir(transaccion)
         except Exception as e:

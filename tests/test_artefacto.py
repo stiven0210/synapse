@@ -28,9 +28,9 @@ def test_calcular_scores_caso_numerico_a_mano():
 
 
 def test_calcular_scores_coincide_exactamente_con_ejecutor_decidir_fila_por_fila():
-    # Train/serve parity: la versión batch (diagnóstico offline) debe producir
-    # exactamente el mismo score que la versión incremental real
-    # (Ejecutor.decidir(), el camino caliente) para las mismas filas.
+    # Train/serve parity: the batch version (offline diagnostic) must produce
+    # exactly the same score as the real incremental version
+    # (Ejecutor.decidir(), the hot path) for the same rows.
     rng = np.random.default_rng(0)
     df = pd.DataFrame({"Amount": rng.normal(50, 20, 200).clip(min=0), "Time": np.arange(200, dtype=float)})
 
@@ -47,7 +47,7 @@ def test_calcular_scores_coincide_exactamente_con_ejecutor_decidir_fila_por_fila
 
 def test_calcular_scores_numericamente_estable_para_z_muy_negativo():
     df = pd.DataFrame({"Amount": [-100_000.0]})
-    artefacto = {**ARTEFACTO, "coeficientes": [1.0]}  # z muy negativo
+    artefacto = {**ARTEFACTO, "coeficientes": [1.0]}  # very negative z
 
     scores = calcular_scores(artefacto, df)
 
@@ -57,7 +57,7 @@ def test_calcular_scores_numericamente_estable_para_z_muy_negativo():
 
 def test_calcular_scores_numericamente_estable_para_z_muy_positivo():
     df = pd.DataFrame({"Amount": [100_000.0]})
-    artefacto = {**ARTEFACTO, "coeficientes": [1.0]}  # z muy positivo
+    artefacto = {**ARTEFACTO, "coeficientes": [1.0]}  # very positive z
 
     scores = calcular_scores(artefacto, df)
 

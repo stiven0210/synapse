@@ -1,20 +1,20 @@
-"""Ejecutor de árboles (Dominio 2, capa rápida) — evalúa el artefacto de
-`artefacto_arboles.py` vía la tabla de búsqueda v3 (umbrales reales del
-modelo, exacta por construcción — ver docstring de ese módulo), nunca
-recorriendo árboles ni cargando sklearn en el camino caliente. Medido en
-`tests/test_ejecutor_arboles.py` sobre volumen real.
+"""Tree executor (Domain 2, fast layer) — evaluates the artifact from
+`artefacto_arboles.py` via the v3 lookup table (the model's real
+thresholds, exact by construction — see that module's docstring), never
+walking trees or loading sklearn on the hot path. Measured in
+`tests/test_ejecutor_arboles.py` under real volume.
 
-**Mismas advertencias de bajo nivel que `ejecutor.py`** (Dominio 1):
-`decidir()` puede devolver un `score` técnicamente fuera de rango si el
-artefacto está corrupto de una forma que pasó la validación de forma pero no
-de contenido; en Python `nan >= umbral` es `False`, así que usar
-`resultado["es_sospechosa"]` directo trataría eso como "no sospechosa". La
-forma correcta de usar esto es a través de `ciclo_arboles.py::CicloDecisionArboles`,
-que fuerza el paso por `veto.py` (reusado sin modificar) y por el Puente.
+**Same low-level warnings as `ejecutor.py`** (Domain 1): `decidir()` can
+return a `score` technically out of range if the artifact is corrupt in a
+way that passed shape validation but not content validation; in Python
+`nan >= umbral` is `False`, so using `resultado["es_sospechosa"]` directly
+would treat that as "not suspicious". The correct way to use this is
+through `ciclo_arboles.py::CicloDecisionArboles`, which forces the call
+through `veto.py` (reused without modification) and through the Bridge.
 
-**No es thread-safe**, por el mismo motivo que `Ejecutor`: `EstadoRecursivoGlobal`
-y `EstadoRecursivoPorCuenta` no tienen sincronización y asumen un único
-stream secuencial de eventos no decrecientes en el tiempo.
+**Not thread-safe**, for the same reason as `Ejecutor`: `EstadoRecursivoGlobal`
+and `EstadoRecursivoPorCuenta` have no synchronization and assume a single
+sequential stream of non-decreasing-in-time events.
 """
 import bisect
 import copy
@@ -29,24 +29,25 @@ __all__ = ["ArtefactoArbolesInvalido", "EjecutorArboles", "validar_artefacto_arb
 
 
 def _interpolar_isotonica(x: float, xs: list, ys: list) -> float:
-    """Reproduce `IsotonicRegression.predict()` con `out_of_bounds="clip"`
-    en Python puro: fuera de rango se clampa al extremo, dentro de rango se
-    interpola linealmente entre los dos breakpoints vecinos -- verificado
-    idéntico a `np.interp` (que a su vez reproduce sklearn exacto, ver
-    `src/calibrador_arboles.py`), sin depender de numpy en el camino caliente.
+    """Reproduces `IsotonicRegression.predict()` with `out_of_bounds="clip"`
+    in pure Python: out of range clamps to the extreme, in range
+    interpolates linearly between the two neighboring breakpoints --
+    verified identical to `np.interp` (which itself reproduces sklearn
+    exactly, see `src/calibrador_arboles.py`), with no numpy dependency on
+    the hot path.
 
-    **NaN se deja pasar sin lanzar**, igual que `Ejecutor._sigmoide` de
-    Dominio 1 (`math.exp(nan)` no lanza, produce `nan` limpio) -- un score
-    de tabla corrupto (NaN) debe llegar como NaN hasta `veto.py`, que es
-    quien lo distingue (ADR_002, invariante 3), no reventar antes por un
-    `bisect` que no sabe comparar NaN."""
+    **NaN is let through without raising**, same as Domain 1's
+    `Ejecutor._sigmoide` (`math.exp(nan)` doesn't raise, it produces a
+    clean `nan`) -- a corrupt table score (NaN) must reach `veto.py` as
+    NaN, since that's what distinguishes it (ADR_002, invariant 3), rather
+    than blowing up earlier on a `bisect` that can't compare NaN."""
     if isinstance(x, float) and math.isnan(x):
         return float("nan")
     if x <= xs[0]:
         return ys[0]
     if x >= xs[-1]:
         return ys[-1]
-    i = bisect.bisect_right(xs, x) - 1  # xs[i] <= x < xs[i+1] (xs no tiene duplicados por construcción)
+    i = bisect.bisect_right(xs, x) - 1  # xs[i] <= x < xs[i+1] (xs has no duplicates by construction)
     x0, x1 = xs[i], xs[i + 1]
     y0, y1 = ys[i], ys[i + 1]
     if x1 == x0:
@@ -58,26 +59,26 @@ def _interpolar_isotonica(x: float, xs: list, ys: list) -> float:
 class EjecutorArboles:
     artefacto: dict
     estado_global: EstadoRecursivoGlobal = field(default_factory=EstadoRecursivoGlobal)
-    estado_cuenta: EstadoRecursivoPorCuenta = None  # se inicializa en __post_init__ con la frecuencia del artefacto
-    estado_frecuencia_categoria: EstadoFrecuenciaCategoriaGlobal = None  # idem, con n_categorias del artefacto
+    estado_cuenta: EstadoRecursivoPorCuenta = None  # initialized in __post_init__ with the artifact's frequency
+    estado_frecuencia_categoria: EstadoFrecuenciaCategoriaGlobal = None  # same, with the artifact's n_categorias
 
     def __post_init__(self) -> None:
         validar_artefacto_arboles(self.artefacto)
-        # Copia defensiva -- mismo hallazgo de auditoría que Ejecutor de Dominio 1: sin esto,
-        # mutar el dict original después de construir invalidaría la garantía "validado una vez".
+        # Defensive copy -- same audit finding as Domain 1's Executor: without this,
+        # mutating the original dict after construction would invalidate the "validated once" guarantee.
         self.artefacto = copy.deepcopy(self.artefacto)
 
         if self.estado_cuenta is None:
             self.estado_cuenta = EstadoRecursivoPorCuenta(frecuencia_categoria=self.artefacto["frecuencia_poblacional_categoria"])
         if self.estado_frecuencia_categoria is None:
-            # n_categorias = vocabulario de categorías conocidas de TRAIN -- mismo criterio que
-            # `calibrador_arboles.construir_features` (ver ese docstring), no un campo nuevo del artefacto.
+            # n_categorias = TRAIN's known-category vocabulary -- same criterion as
+            # `calibrador_arboles.construir_features` (see that docstring), not a new artifact field.
             n_categorias = len(self.artefacto["frecuencia_poblacional_categoria"])
             self.estado_frecuencia_categoria = EstadoFrecuenciaCategoriaGlobal(n_categorias=n_categorias)
 
-        # Precómputo hecho UNA VEZ al construir, no en cada decidir(): strides para indexar la
-        # tabla plana en O(1) sin reshape de numpy en el camino caliente (mismo espíritu que
-        # "código generado" del doc -- eliminar overhead repetido, no cambiar el algoritmo).
+        # Precomputed ONCE at construction, not on every decidir(): strides to index the
+        # flat table in O(1) with no numpy reshape on the hot path (same spirit as the
+        # doc's "generated code" -- eliminating repeated overhead, not changing the algorithm).
         self._features = self.artefacto["features"]
         self._umbrales = self.artefacto["umbrales_por_feature"]
         forma = self.artefacto["tabla_busqueda_forma"]
@@ -90,11 +91,11 @@ class EjecutorArboles:
         self._ys_isotonica = self.artefacto["calibracion_isotonica"]["y"]
 
     def decidir(self, transaccion: dict) -> dict:
-        """`transaccion` trae al menos `cc_num`, `amt`, `unix_time`,
-        `category` (esquema Sparkov, ver `docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md`).
-        O(1) -- ninguna operación aquí recorre el historial completo ni los
-        árboles. Ver advertencia del módulo: el resultado NO debe usarse
-        directo, debe pasar por `veto.evaluar()` vía `CicloDecisionArboles`."""
+        """`transaccion` carries at least `cc_num`, `amt`, `unix_time`,
+        `category` (Sparkov schema, see `docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md`).
+        O(1) -- no operation here walks the full history or the trees. See
+        the module warning: the result must NOT be used directly, it must
+        go through `veto.evaluar()` via `CicloDecisionArboles`."""
         cc_num = transaccion["cc_num"]
         monto = transaccion["amt"]
         tiempo = transaccion["unix_time"]
@@ -123,13 +124,13 @@ class EjecutorArboles:
         score_crudo = self._tabla[indice_plano]
         score = _interpolar_isotonica(score_crudo, self._xs_isotonica, self._ys_isotonica)
 
-        # El estado se actualiza DESPUÉS de leer/decidir -- misma semántica causal que Dominio 1:
-        # la transacción actual nunca se ve a sí misma en su propio contexto reciente.
+        # State is updated AFTER reading/deciding -- same causal semantics as Domain 1:
+        # the current transaction never sees itself in its own recent context.
         self.estado_global.actualizar(monto, tiempo)
         self.estado_cuenta.actualizar(cc_num, monto, categoria, tiempo)
         self.estado_frecuencia_categoria.actualizar(categoria)
 
-        # Igual que Ejecutor de Dominio 1: si score es NaN, `nan >= umbral` da False en Python --
-        # deliberado, no se guarda aquí. La razón de ser de `veto.py` (que SÍ distingue NaN) es
-        # exactamente esta; ver advertencia del módulo y `ciclo_arboles.py::CicloDecisionArboles`.
+        # Same as Domain 1's Executor: if score is NaN, `nan >= umbral` gives False in Python --
+        # deliberate, not guarded against here. This is exactly why `veto.py` (which DOES
+        # distinguish NaN) exists; see the module warning and `ciclo_arboles.py::CicloDecisionArboles`.
         return {"score": score, "es_sospechosa": score >= self.artefacto["umbral_decision"]}

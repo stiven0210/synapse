@@ -21,7 +21,7 @@ ARTEFACTO = {
 }
 
 
-# --- Nivel 1: unidad, determinista ------------------------------------------------
+# --- Level 1: unit, deterministic ------------------------------------------------
 
 def test_registrar_y_leer_round_trip(tmp_path):
     ruta = tmp_path / "bitacora.jsonl"
@@ -68,19 +68,19 @@ def test_registrar_decision_sin_indice_fila_queda_none(tmp_path):
 
 
 def test_leer_bitacora_tolera_una_linea_final_truncada(tmp_path):
-    # Hallazgo real de auditoría: una escritura interrumpida a mitad de la
-    # última línea (ej. corte de luz, proceso matado a mitad de un write)
-    # no debe invalidar las entradas anteriores, que es justo lo que este
-    # módulo dice garantizar.
+    # Real audit finding: a write interrupted mid-way through the last
+    # line (e.g. a power cut, a process killed mid-write) must not
+    # invalidate the earlier entries, which is exactly what this
+    # module claims to guarantee.
     ruta = tmp_path / "bitacora.jsonl"
     registrar_decision(DecisionFinal(es_sospechosa=False, razon="modelo", score=0.1), {"Amount": 1.0}, ruta)
     registrar_decision(DecisionFinal(es_sospechosa=True, razon="modelo", score=0.9), {"Amount": 2.0}, ruta)
     with ruta.open("a", encoding="utf-8") as f:
-        f.write('{"timestamp": "2026-01-01T00:00:00", "tipo": "modelo", "es_sosp')  # línea truncada, sin cerrar
+        f.write('{"timestamp": "2026-01-01T00:00:00", "tipo": "modelo", "es_sosp')  # truncated line, unclosed
 
     entradas = leer_bitacora(ruta)
 
-    assert len(entradas) == 2  # las 2 completas se leen igual, la truncada se omite
+    assert len(entradas) == 2  # the 2 complete ones are still read, the truncated one is skipped
     assert [e["transaccion"]["Amount"] for e in entradas] == [1.0, 2.0]
 
 
@@ -92,8 +92,8 @@ def test_clasificar_razon_mapea_los_4_tipos_conocidos():
 
 
 def test_clasificar_razon_cubre_los_textos_reales_de_veto_y_ciclo():
-    # No copia los strings a mano -- llama a veto.evaluar() de verdad, para que un
-    # cambio de texto en veto.py rompa este test en vez de misclasificar en silencio.
+    # Doesn't copy the strings by hand -- calls the real veto.evaluar(), so that a
+    # text change in veto.py breaks this test instead of silently misclassifying.
     normal = evaluar({"score": 0.9, "es_sospechosa": True}, {"Amount": 50.0})
     assert clasificar_razon(normal.razon) == TipoEscalamiento.MODELO
 
@@ -115,16 +115,16 @@ def test_filtrar_escalamientos_operativos_excluye_modelo_y_monto(tmp_path):
     assert {e["tipo"] for e in operativos} == {"score_invalido", "error_ejecutor"}
 
 
-# --- Nivel 2: escenarios de causa real conocida, de punta a punta -----------------
-# A diferencia de tests/test_ciclo.py (que monkeypatchea Ejecutor.decidir directo
-# para aislar el Veto), estos alimentan una condición de datos real y verifican que
-# TODO el camino -- Ejecutor -> Veto -> CicloDecision -> bitácora -- termina
-# clasificado correctamente. Es la base para poder verificar después, con un
-# agente de triage, si su hipótesis señala la causa correcta.
+# --- Level 2: end-to-end scenarios with a known real cause -----------------
+# Unlike tests/test_ciclo.py (which monkeypatches Ejecutor.decidir directly
+# to isolate the Veto), these feed a real data condition and verify that
+# the WHOLE path -- Executor -> Veto -> CicloDecision -> log -- ends up
+# classified correctly. This is the foundation for later verifying, with
+# a triage agent, whether its hypothesis points to the right cause.
 
 def test_escenario_feature_corrupta_nan_se_clasifica_como_score_invalido(tmp_path):
-    # Causa real: un pipeline de datos aguas arriba entrega Amount=NaN para una
-    # transacción -- el Ejecutor no lanza excepción, pero el score resultante es NaN.
+    # Real cause: an upstream data pipeline delivers Amount=NaN for a
+    # transaction -- the Executor doesn't raise, but the resulting score is NaN.
     ruta_artefacto = tmp_path / "artefacto.json"
     ruta_bitacora = tmp_path / "bitacora.jsonl"
     publicar(ARTEFACTO, ruta_artefacto)
@@ -140,14 +140,14 @@ def test_escenario_feature_corrupta_nan_se_clasifica_como_score_invalido(tmp_pat
 
 
 def test_escenario_feature_faltante_se_clasifica_como_error_ejecutor(tmp_path):
-    # Causa real: la fuente de transacciones no manda "Amount" -- desajuste de
-    # esquema entre esa fuente y lo que el artefacto vigente espera.
+    # Real cause: the transaction source doesn't send "Amount" -- a schema
+    # mismatch between that source and what the current artifact expects.
     ruta_artefacto = tmp_path / "artefacto.json"
     ruta_bitacora = tmp_path / "bitacora.jsonl"
     publicar(ARTEFACTO, ruta_artefacto)
     ciclo = CicloDecision(ruta_artefacto=ruta_artefacto)
 
-    transaccion = {"Time": 0.0}  # falta "Amount"
+    transaccion = {"Time": 0.0}  # missing "Amount"
     decision = ciclo.decidir(transaccion)
     registrar_decision(decision, transaccion, ruta_bitacora)
 

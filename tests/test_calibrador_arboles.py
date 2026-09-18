@@ -18,8 +18,8 @@ from src.features_recursivas_cuenta import calcular_frecuencia_poblacional_categ
 
 
 def _dataset_sintetico(n=3000, tasa_fraude=0.08, semilla=0) -> pd.DataFrame:
-    # Separable a propósito (amt alto -> fraude) -- no busca ser realista, solo ejercitar el
-    # pipeline completo (extracción de umbrales, tabla de búsqueda, calibración) rápido en tests.
+    # Deliberately separable (high amt -> fraud) -- not meant to be realistic, just to
+    # exercise the full pipeline (threshold extraction, lookup table, calibration) fast in tests.
     rng = np.random.default_rng(semilla)
     cuentas = rng.choice(["A", "B", "C", "D", "E"], size=n)
     categorias = rng.choice(["grocery", "gas", "entertainment"], size=n)
@@ -44,13 +44,13 @@ def pipeline_sintetico():
 
 
 def test_calibrar_produce_artefacto_valido(pipeline_sintetico):
-    validar_artefacto_arboles(pipeline_sintetico["artefacto"])  # no debe lanzar
+    validar_artefacto_arboles(pipeline_sintetico["artefacto"])  # must not raise
 
 
 def test_calibrar_aprende_la_separacion_sintetica(pipeline_sintetico):
     m = pipeline_sintetico["artefacto"]["metricas_validacion"]
-    # La regla sintética (amt alto -> fraude) es trivialmente separable -- el modelo debe
-    # aprenderla casi perfectamente; esto NO es una afirmación sobre desempeño en fraude real.
+    # The synthetic rule (high amt -> fraud) is trivially separable -- the model should
+    # learn it almost perfectly; this is NOT a claim about performance on real fraud.
     assert m["auc_pr_val"] > 0.95
     assert m["recall_val"] > 0.8
 
@@ -86,13 +86,13 @@ def test_mejor_umbral_por_f1_caso_separable():
     y = np.array([0, 0, 0, 1, 1, 1])
     scores = np.array([0.1, 0.2, 0.3, 0.7, 0.8, 0.9])
     umbral = _mejor_umbral_por_f1(y, scores)
-    assert 0.3 < umbral <= 0.7  # cualquier corte en el hueco separa perfectamente
+    assert 0.3 < umbral <= 0.7  # any cutoff in the gap separates perfectly
 
 
 def test_tabla_busqueda_bit_exacta_contra_predict_proba_dataset_sintetico(pipeline_sintetico):
-    # Versión rápida (dataset sintético, ~3000 filas) del test bit-exacto real de
-    # tests/test_ejecutor_arboles.py -- corre siempre, no depende de que el CSV real de Sparkov
-    # esté presente. Igual disciplina: replay desde el inicio de TODO el historial, no solo test.
+    # Fast version (synthetic dataset, ~3000 rows) of the real bit-exact test in
+    # tests/test_ejecutor_arboles.py -- always runs, doesn't depend on the real Sparkov
+    # CSV being present. Same discipline: replay from the start of the ENTIRE history, not just test.
     artefacto = pipeline_sintetico["artefacto"]
     modelo = pipeline_sintetico["modelo"]
     df_test = pipeline_sintetico["df_test"]
@@ -116,10 +116,10 @@ def test_tabla_busqueda_bit_exacta_contra_predict_proba_dataset_sintetico(pipeli
 
 
 def test_features_monitoreo_deriva_excluye_frecuencia_categoria_expandida():
-    # Sección 19 del doc: frecuencia_categoria_expandida es no estacionaria por diseño y
-    # dispara recalibración en el 85% de las transiciones año a año (vs. 23% del resto) --
-    # falsa alarma constante, no señal real. Se excluye del set que se le pasa a
-    # deriva.py::evaluar_deriva(), sin tocar ese módulo (ya es genérico sobre cualquier columna).
+    # Doc section 19: frecuencia_categoria_expandida is non-stationary by design and
+    # triggers recalibration on 85% of year-over-year transitions (vs. 23% for the rest) --
+    # a constant false alarm, not a real signal. It's excluded from the set passed to
+    # deriva.py::evaluar_deriva(), without touching that module (it's already generic over any column).
     assert "frecuencia_categoria_expandida" not in FEATURES_MONITOREO_DERIVA
     assert set(FEATURES_MONITOREO_DERIVA) == set(FEATURES_ARBOLES) - {"frecuencia_categoria_expandida"}
     assert len(FEATURES_MONITOREO_DERIVA) == len(FEATURES_ARBOLES) - 1

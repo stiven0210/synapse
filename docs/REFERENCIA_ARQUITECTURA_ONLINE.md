@@ -1,100 +1,99 @@
-# Referencia: cómo llegarían los datos en un despliegue online real
+# Reference: how data would arrive in a real online deployment
 
-**Estado: documentación de referencia, no un plan activo.** SYNAPSE sigue en
-fase de pruebas/investigación (ver `docs/PLAN_DE_TRABAJO.md` y
-`docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md`) — nada de esto está
-implementado ni se está construyendo ahora. Esta nota existe para no perder
-el razonamiento de una conversación puntual sobre cómo se vería la ingesta
-de datos el día que se decida desplegar algo real, apoyado en lo que el
-código de `src/` (Dominio 1 y Dominio 2) ya exige por diseño, no en
-suposiciones.
+**Status: reference documentation, not an active plan.** SYNAPSE is still in
+its testing/research phase (see `docs/PLAN_DE_TRABAJO.md` and
+`docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md`) — none of this is
+implemented or being built right now. This note exists so the reasoning
+from a specific conversation about what data ingestion would look like the
+day a real deployment is decided doesn't get lost — grounded in what the
+code in `src/` (Domain 1 and Domain 2) already requires by design, not in
+assumptions.
 
-## 1. Primero, una decisión que cambia todo: ¿bloquea la transacción o solo la observa?
+## 1. First, a decision that changes everything: does it block the transaction, or just observe it?
 
-- **Si SYNAPSE tiene que aprobar/rechazar ANTES de que la transacción se
-  complete** (autorización real, como funciona una red de tarjetas) → no es
-  streaming asíncrono, es una **llamada síncrona directa** (gRPC o REST): el
-  procesador de pagos llama y espera la respuesta antes de seguir. Un
-  manejador de eventos en el medio solo agregaría latencia que no se puede
-  pagar en ese flujo.
-- **Si SYNAPSE solo observa transacciones ya completadas** (para alertar,
-  generar un caso de revisión manual, o alimentar `deriva.py`/el disparador
-  de recalibración) → ahí sí tiene sentido un manejador de eventos
-  asíncrono (sección 3).
+- **If SYNAPSE has to approve/reject BEFORE the transaction completes**
+  (real authorization, the way a card network works) → this isn't async
+  streaming, it's a **direct synchronous call** (gRPC or REST): the payment
+  processor calls and waits for the response before continuing. An event
+  handler in the middle would only add latency that flow can't afford.
+- **If SYNAPSE only observes already-completed transactions** (to alert,
+  generate a manual-review case, or feed `deriva.py`/the recalibration
+  trigger) → then an async event handler makes sense (section 3).
 
-## 2. Requisitos reales de llegada de datos, según lo que el código ya exige
+## 2. Real data-arrival requirements, based on what the code already demands
 
-No es teoría — son restricciones que `src/ejecutor.py`, `src/ciclo.py` y
-`src/features_recursivas*.py` ya imponen hoy:
+This isn't theory — these are constraints `src/ejecutor.py`, `src/ciclo.py`,
+and `src/features_recursivas*.py` already impose today:
 
-1. **Un evento a la vez, en orden temporal — nunca por lotes.** El Ejecutor
-   procesa transacción por transacción. Un evento que llega "del pasado"
-   después de uno más nuevo se **rechaza explícitamente**
-   (`TiempoFueraDeOrden`) en vez de corromper el estado en silencio. Para
-   Dominio 1 el orden que importa es global; para Dominio 2, por cuenta
+1. **One event at a time, in temporal order — never in batches.** The
+   Executor processes transaction by transaction. An event that arrives
+   "from the past" after a newer one is **explicitly rejected**
+   (`TiempoFueraDeOrden`) instead of silently corrupting state. For
+   Domain 1 the order that matters is global; for Domain 2, per account
    (`EstadoRecursivoPorCuenta`).
-2. **Una sola línea de procesamiento por entidad.** El estado no es seguro
-   para múltiples hilos a la vez, por diseño (ver docstring de
-   `ejecutor.py`). Con varias instancias corriendo en paralelo, cada cuenta
-   tiene que ir siempre al mismo "carril" para que su historial no se
-   divida entre instancias distintas.
-3. **El artefacto de política ya tiene que estar cargado antes de la primera
-   transacción real** — se lee una vez al arrancar (vía el Puente) y se
-   recarga cuando hay versión nueva, nunca a mitad de una decisión.
-4. **Formato del evento**: solo los campos crudos que el modelo necesita
-   (para Dominio 2: cuenta, monto, marca de tiempo, categoría) — el resto
-   (EWMA, huella, etc.) lo calcula el Ejecutor mismo, no hace falta
-   mandarlo precalculado.
+2. **A single processing lane per entity.** State is not safe for
+   multiple threads at once, by design (see `ejecutor.py`'s docstring).
+   With several instances running in parallel, each account always has to
+   land on the same "lane" so its history doesn't get split across
+   different instances.
+3. **The policy artifact must already be loaded before the first real
+   transaction** — it's read once at startup (via the Bridge) and reloaded
+   when a new version exists, never mid-decision.
+4. **Event format**: only the raw fields the model needs (for Domain 2:
+   account, amount, timestamp, category) — everything else (EWMA,
+   fingerprint, etc.) is computed by the Executor itself; there's no need
+   to send it pre-computed.
 
-En resumen: el patrón real es una **cola/stream de eventos, uno por
-transacción, con orden garantizado al menos por entidad** — no un archivo
-ni un lote procesado cada tanto.
+In short: the real pattern is an **event queue/stream, one per
+transaction, with order guaranteed at least per entity** — not a file or a
+batch processed every so often.
 
-## 3. Manejadores de eventos, comparados en lo que le importa a SYNAPSE
+## 3. Event handlers, compared on what actually matters to SYNAPSE
 
-Eje de comparación: ¿garantiza orden por key? ¿permite un consumidor de
-larga duración que mantenga estado en memoria (para no perder la ventaja de
-microsegundos)?
+Comparison axis: does it guarantee order per key? Does it allow a
+long-lived consumer that keeps state in memory (so the microsecond
+advantage isn't lost)?
 
-| Opción | Orden por key | Mejor para | Nota |
+| Option | Order per key | Best for | Note |
 |---|---|---|---|
-| **Apache Kafka** (o gestionado: Confluent Cloud, Amazon MSK, Azure Event Hubs API Kafka) | Sí, por partición | El estándar real de la industria bancaria — muchos sistemas de fraude reales se construyen sobre esto | Partición = misma lógica de shard que Kinesis; un consumidor de larga duración por partición mantiene el estado en memoria |
-| **Amazon Kinesis Data Streams** | Sí, por shard | Ecosistema AWS | Mismo patrón que Kafka (partition key → shard) |
-| **Google Cloud Pub/Sub** (con ordering key) | Sí, con matices | Ecosistema GCP | Si un mensaje falla, los siguientes con la misma key se traban esperando — hay que manejar ese caso |
-| **Azure Event Hubs** | Sí, por partición | Ecosistema Azure | Compatible con protocolo Kafka, mismo patrón |
-| **Redis Streams** | Sí, por stream | Setups chicos/simples | Puede ser broker de eventos Y el lugar donde vive el estado compartido a la vez — un solo sistema en vez de dos |
-| **NATS JetStream** | Sí, por subject | Latencia muy baja, sistemas livianos | Menos común en banca, técnicamente muy rápido |
-| **RabbitMQ** | Parcial (requiere configuración extra) | Colas de trabajo tradicionales | El que peor encaja — no está pensado para "un log ordenado por entidad" |
+| **Apache Kafka** (or managed: Confluent Cloud, Amazon MSK, Azure Event Hubs Kafka API) | Yes, per partition | The real standard in the banking industry — many real fraud systems are built on this | Partition = same sharding logic as Kinesis; one long-lived consumer per partition keeps state in memory |
+| **Amazon Kinesis Data Streams** | Yes, per shard | AWS ecosystem | Same pattern as Kafka (partition key → shard) |
+| **Google Cloud Pub/Sub** (with ordering key) | Yes, with caveats | GCP ecosystem | If one message fails, the following ones with the same key get stuck waiting — has to be handled |
+| **Azure Event Hubs** | Yes, per partition | Azure ecosystem | Kafka-protocol compatible, same pattern |
+| **Redis Streams** | Yes, per stream | Small/simple setups | Can be the event broker AND where the shared state lives, at once — one system instead of two |
+| **NATS JetStream** | Yes, per subject | Very low latency, lightweight systems | Less common in banking, technically very fast |
+| **RabbitMQ** | Partial (needs extra config) | Traditional work queues | The worst fit — not designed for "a log ordered per entity" |
 
-**Trampa a evitar en cualquiera de estas opciones:** no usar un consumidor
-sin estado (ej. AWS Lambda por defecto) si se quiere preservar la ventaja
-de microsegundos — perdería el estado en memoria (`EstadoRecursivoPorCuenta`)
-entre invocaciones. Alternativas: (a) un proceso de larga duración
-(ECS/Fargate, EC2, Cloud Run con `min-instances`) manteniendo el estado en
-memoria, o (b) externalizar el estado a Redis/DynamoDB/Memorystore, a costa
-de pasar de microsegundos a milisegundos bajos por la ida y vuelta de red
-(ver también el punto de Memorystore en la comparación de arquitectura GCP
-de esta misma conversación).
+**Trap to avoid with any of these:** don't use a stateless consumer (e.g.
+AWS Lambda by default) if you want to keep the microsecond advantage — it
+would lose the in-memory state (`EstadoRecursivoPorCuenta`) between
+invocations. Alternatives: (a) a long-lived process (ECS/Fargate, EC2,
+Cloud Run with `min-instances`) keeping state in memory, or (b)
+externalize state to Redis/DynamoDB/Memorystore, at the cost of going from
+microseconds to low milliseconds because of the network round trip (see
+also the Memorystore point in this same conversation's GCP architecture
+comparison).
 
-## 4. Recomendación (solo como referencia futura)
+## 4. Recommendation (reference only, for the future)
 
-- **Parte que decide/bloquea:** llamada directa (gRPC/REST), sin
-  intermediario.
-- **Parte que observa/alimenta bitácora y deriva:** Kafka (o su equivalente
-  gestionado según el proveedor) — patrón más probado, partición por
-  entidad, worker de larga duración con estado en memoria.
-- **Si el volumen es chico** (demo/POC): Redis Streams, para no operar dos
-  sistemas separados (cola + estado).
+- **The part that decides/blocks:** a direct call (gRPC/REST), with no
+  intermediary.
+- **The part that observes/feeds the log and drift detection:** Kafka (or
+  its managed equivalent depending on the provider) — the most proven
+  pattern, partitioned by entity, a long-lived worker with in-memory
+  state.
+- **If volume is small** (demo/POC): Redis Streams, to avoid running two
+  separate systems (queue + state).
 
-## 5. Costos (referencia GCP, revisar equivalentes en cada proveedor)
+## 5. Costs (GCP reference, check the equivalents for each provider)
 
-Para una demo/POC a bajo volumen, la mayoría de las piezas necesarias caben
-en el *Always Free tier* de GCP sin costo real: Cloud Run (2M requests/mes),
-BigQuery (1TB de queries/mes), Cloud Storage (5GB-mes), Cloud Scheduler (3
-jobs/mes), Secret Manager. Las dos piezas que **siempre cobran algo**,
-aunque el volumen sea bajo: Memorystore/Redis administrado (sin free tier,
-~$35-50/mes mínimo, cobra por hora aunque esté inactivo) y Vertex AI
-Pipelines (sin free tier, pero barato para corridas diarias — unos pocos
-dólares al mes). Para quedarse en $0 real: saltar Memorystore (seguir con
-estado en memoria de proceso) y correr el Calibrador como un job simple
-disparado por scheduler en vez de un pipeline gestionado.
+For a low-volume demo/POC, most of the necessary pieces fit in GCP's
+*Always Free* tier at no real cost: Cloud Run (2M requests/month),
+BigQuery (1TB of queries/month), Cloud Storage (5GB-month), Cloud
+Scheduler (3 jobs/month), Secret Manager. The two pieces that **always
+cost something**, even at low volume: managed Memorystore/Redis (no free
+tier, ~$35-50/month minimum, billed hourly even while idle) and Vertex AI
+Pipelines (no free tier, but cheap for daily runs — a few dollars a
+month). To stay at real $0: skip Memorystore (keep in-process memory
+state) and run the Calibrator as a simple scheduler-triggered job instead
+of a managed pipeline.

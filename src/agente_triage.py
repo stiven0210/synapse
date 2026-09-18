@@ -1,22 +1,23 @@
-"""Agente de triage sobre escalamientos operativos de Veto —
-`docs/adr/0003-triage-agent.md`. Implementa la misma disciplina de 3
-capas usada en un agente similar de un proyecto anterior propio, replicada
-aquí como código nuevo e independiente — SYNAPSE no comparte código con
-otros proyectos (`CLAUDE.md`).
+"""Triage agent for operational Veto escalations —
+`docs/adr/0003-triage-agent.md`. Implements the same 3-layer discipline
+used in a similar agent from an earlier project of ours, replicated here
+as new, independent code — SYNAPSE shares no code with other projects
+(`CLAUDE.md`).
 
-**Nunca participa en el camino caliente**: no se invoca desde
-`CicloDecision.decidir()`. Se corre después, sobre entradas ya escritas en
-`src/bitacora_decisiones.py` (solo las de tipo `SCORE_INVALIDO` o
-`ERROR_EJECUTOR` — las que representan una falla de sistema, no un juicio
-sobre una transacción; ver `filtrar_escalamientos_operativos()`).
+**Never participates in the hot path**: it is never invoked from
+`CicloDecision.decidir()`. It runs afterward, over entries already
+written to `src/bitacora_decisiones.py` (only the ones of type
+`SCORE_INVALIDO` or `ERROR_EJECUTOR` — the ones representing a system
+failure, not a judgment call about a transaction; see
+`filtrar_escalamientos_operativos()`).
 
-**Nunca decide ni bloquea nada** — el output es una hipótesis para que un
-humano la verifique, nunca cambia ningún estado del sistema.
+**Never decides or blocks anything** — its output is a hypothesis for a
+human to verify, it never changes any system state.
 
-Cliente LLM inyectable (`cliente_llm: Callable[[str], str]`) para poder
-testear la lógica de auditoría sin API real — en producción, pasar
-`crear_cliente_claude()` (requiere `ANTHROPIC_API_KEY` en el entorno, nunca
-hardcoded), envuelto en `limitador_llamadas.LimitadorLlamadasDiarias`.
+Injectable LLM client (`cliente_llm: Callable[[str], str]`) so the
+auditing logic can be tested without a real API — in production, pass
+`crear_cliente_claude()` (requires `ANTHROPIC_API_KEY` in the environment,
+never hardcoded), wrapped in `limitador_llamadas.LimitadorLlamadasDiarias`.
 """
 import json
 import random
@@ -26,7 +27,7 @@ from typing import Callable
 SEVERIDADES_VALIDAS = {"baja", "media", "alta"}
 ACCIONES_VALIDAS = {"investigar_pipeline_datos", "verificar_artefacto", "verificar_esquema_transaccion", "sin_accion_clara"}
 
-TASA_MUESTREO_AUDITOR_DEFECTO = 0.2  # Capa 3: 1 de cada 5, no el 100% (mismo principio usado en un proyecto anterior propio)
+TASA_MUESTREO_AUDITOR_DEFECTO = 0.2  # Layer 3: 1 in 5, not 100% (same principle used in an earlier project of ours)
 VENTANA_CIRCUITO_DEFECTO = 20
 UMBRAL_TASA_DESCARTE_DEFECTO = 0.5
 
@@ -59,14 +60,14 @@ CONTEXTO:
 
 
 class FalloCapa1(Exception):
-    """El output del LLM no cumple el schema -- se descarta, nunca llega al humano como hipótesis."""
+    """The LLM output doesn't meet the schema -- discarded, never reaches the human as a hypothesis."""
 
 
 class CircuitoAbierto(Exception):
-    """Tasa de descarte reciente demasiado alta -- el agente se apaga solo
-    antes de gastar en una llamada más que probablemente se va a descartar.
-    El llamador debe caer al reporte plano determinista (la entrada de
-    bitácora tal cual, sin narrativa)."""
+    """Recent discard rate too high -- the agent shuts itself off before
+    spending on another call that would likely be discarded anyway.
+    The caller should fall back to the flat, deterministic report (the log
+    entry as-is, with no narrative)."""
 
 
 @dataclass(frozen=True)
@@ -96,9 +97,9 @@ class ResultadoTriage:
 
 @dataclass
 class CircuitoTriage:
-    """Ventana deslizante de los últimos `ventana` resultados (descartado o
-    no). Si no hay suficiente historial todavía, se asume cerrado (no
-    apagar el agente antes de tener señal real)."""
+    """Sliding window over the last `ventana` results (discarded or not).
+    If there isn't enough history yet, it's assumed closed (don't shut the
+    agent off before there's real signal)."""
     ventana: int = VENTANA_CIRCUITO_DEFECTO
     umbral_tasa_descarte: float = UMBRAL_TASA_DESCARTE_DEFECTO
     _historial: list = field(default_factory=list, init=False, repr=False)
@@ -116,11 +117,11 @@ class CircuitoTriage:
 
 
 def _despojar_bloque_markdown(texto: str) -> str:
-    """Hallazgo real (probado con ANTHROPIC_API_KEY real): pese a que el
-    prompt pide "SOLO JSON", el modelo puede envolver la respuesta en un
-    bloque de código markdown (```json ... ```) -- comportamiento común de
-    LLMs, no un error del modelo. Se despoja antes de parsear, sin intentar
-    interpretar nada más allá de eso."""
+    """Real finding (tested with a real ANTHROPIC_API_KEY): even though the
+    prompt asks for "JSON ONLY", the model can wrap the response in a
+    markdown code block (```json ... ```) -- common LLM behavior, not a
+    model error. Stripped before parsing, without trying to interpret
+    anything beyond that."""
     texto = texto.strip()
     if texto.startswith("```"):
         primer_salto = texto.find("\n")
@@ -131,8 +132,8 @@ def _despojar_bloque_markdown(texto: str) -> str:
 
 
 def _capa1_validar_schema(texto_respuesta: str) -> ResultadoLLM:
-    """Chequeo determinista sobre el 100% de las respuestas: JSON bien
-    formado, campos presentes, enums y rangos válidos. Costo cero, sin LLM."""
+    """Deterministic check over 100% of responses: well-formed JSON,
+    required fields present, valid enums and ranges. Zero cost, no LLM."""
     try:
         data = json.loads(_despojar_bloque_markdown(texto_respuesta))
     except json.JSONDecodeError as e:
@@ -165,25 +166,25 @@ def _capa1_validar_schema(texto_respuesta: str) -> ResultadoLLM:
 
 
 def _capa2_grounding(resultado: ResultadoLLM, entrada: dict, contexto: dict) -> bool:
-    """Chequeo determinista y barato sobre el 100% de las salidas válidas:
-    ¿las afirmaciones de `evidencia_citada` comparten vocabulario real con
-    los datos que de verdad se le dieron al agente? No es NLP sofisticado a
-    propósito (mismo principio usado en un proyecto anterior propio) -- detecta el caso
-    obvio de alucinación total desconectada de los datos; la evaluación
-    semántica real es trabajo de la Capa 3, y esa sí es selectiva.
+    """Cheap, deterministic check over 100% of valid outputs: do the claims
+    in `evidencia_citada` share real vocabulary with the data actually
+    given to the agent? Not sophisticated NLP, by design (same principle
+    used in an earlier project of ours) -- it catches the obvious case of
+    total hallucination disconnected from the data; real semantic
+    evaluation is Layer 3's job, and that one is selective.
 
-    Umbral de longitud de palabra en 3 (más bajo que en ese proyecto
-    anterior): acá el vocabulario verificable son tokens técnicos cortos
-    (nombres de feature como "V14", "NaN"), no prosa en inglés.
+    Word-length threshold of 3 (lower than in that earlier project): here
+    the verifiable vocabulary is short technical tokens (feature names
+    like "V14", "NaN"), not English prose.
 
-    **Corrección de un hallazgo real de auditoría**: `evidencia_citada`
-    vacía devolvía `True` ("nada que groundear") -- pero Capa 1 solo exige
-    que sea una lista, no que tenga contenido, así que una hipótesis que no
-    cita ninguna evidencia pasaba Capa 2 gratis, sin necesitar Capa 3.
-    Invierte el incentivo que Capa 2 existe para dar: no citar nada quedaba
-    más seguro para una hipótesis mala que citar algo verificable. Sin
-    evidencia citada, no hay nada que confirme la hipótesis -- se trata
-    como grounding fallido, fuerza Capa 3."""
+    **Fix for a real audit finding**: an empty `evidencia_citada` used to
+    return `True` ("nothing to ground") -- but Layer 1 only requires it to
+    be a list, not to have content, so a hypothesis citing no evidence at
+    all passed Layer 2 for free, without ever needing Layer 3. That
+    inverts the incentive Layer 2 exists to create: citing nothing was
+    safer for a bad hypothesis than citing something verifiable. With no
+    evidence cited, there's nothing to confirm the hypothesis -- it's
+    treated as failed grounding, forcing Layer 3."""
     afirmaciones = resultado.evidencia_citada
     if not afirmaciones:
         return False
@@ -198,8 +199,8 @@ def _capa2_grounding(resultado: ResultadoLLM, entrada: dict, contexto: dict) -> 
 
 
 def _capa3_auditor(resultado: ResultadoLLM, entrada: dict, contexto: dict, cliente_llm: Callable[[str], str]) -> ResultadoAuditoria:
-    """Agent-as-Judge selectivo: solo se invoca si la Capa 2 falla o por
-    muestreo aleatorio -- nunca sobre el 100% de los casos."""
+    """Selective Agent-as-Judge: only invoked if Layer 2 fails or by random
+    sampling -- never over 100% of cases."""
     prompt_auditor = (
         "Eres un auditor escéptico de un sistema de triage de incidentes. Te doy los "
         "datos reales (ENTRADA y CONTEXTO) y una hipótesis que otro asistente propuso "
@@ -261,8 +262,8 @@ class AgenteTriage:
             auditoria = _capa3_auditor(resultado, entrada, contexto, self.cliente_llm)
             detalle["auditoria_capa3"] = auditoria.detalle
             if not auditoria.aprobado:
-                # proponente y auditor en desacuerdo -> no se resuelve "por mayoría": se
-                # descarta el ciclo completo, el humano ve el reporte plano sin hipótesis.
+                # proposer and auditor disagree -> not resolved "by majority": the
+                # whole cycle is discarded, the human sees the flat report with no hypothesis.
                 self.circuito.registrar(descartado=True)
                 detalle["capa_fallida"] = "capa3"
                 return ResultadoTriage(
@@ -281,21 +282,21 @@ class AgenteTriage:
 
 
 def crear_cliente_claude(modelo: str = "claude-sonnet-5") -> Callable[[str], str]:
-    """Cliente real para producción. Requiere `ANTHROPIC_API_KEY` en el
-    entorno (nunca hardcoded) -- `anthropic.Anthropic()` la lee
-    automáticamente. Import perezoso de `anthropic` para que el resto del
-    módulo (y sus tests) no dependan del paquete instalado."""
+    """Real client for production. Requires `ANTHROPIC_API_KEY` in the
+    environment (never hardcoded) -- `anthropic.Anthropic()` reads it
+    automatically. Lazy import of `anthropic` so the rest of the module
+    (and its tests) don't depend on the package being installed."""
     import anthropic
 
     cliente = anthropic.Anthropic()
 
     def llamar(prompt: str) -> str:
-        """Hallazgo real (probado con ANTHROPIC_API_KEY real, no solo con el
-        cliente falso de los tests): `respuesta.content[0]` no siempre es
-        texto -- el modelo puede devolver primero un bloque de razonamiento
-        extendido (`ThinkingBlock`), y `.content[0].text` revienta con
-        `AttributeError`. Se busca explícitamente el/los bloques de tipo
-        "text" en vez de asumir la posición."""
+        """Real finding (tested with a real ANTHROPIC_API_KEY, not just the
+        fake client used in tests): `respuesta.content[0]` isn't always
+        text -- the model can return an extended-thinking block
+        (`ThinkingBlock`) first, and `.content[0].text` blows up with
+        `AttributeError`. Explicitly looks for the block(s) of type "text"
+        instead of assuming the position."""
         respuesta = cliente.messages.create(
             model=modelo, max_tokens=1024, messages=[{"role": "user", "content": prompt}]
         )

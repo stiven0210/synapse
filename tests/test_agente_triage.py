@@ -8,8 +8,8 @@ from src.agente_triage import AgenteTriage, CircuitoAbierto, CircuitoTriage, cre
 
 
 class _RngFijo:
-    """Doble de random.Random con .random() fijo, para controlar el
-    muestreo de la Capa 3 sin depender de una semilla real."""
+    """Stand-in for random.Random with a fixed .random(), to control
+    Layer 3 sampling without depending on a real seed."""
 
     def __init__(self, valor: float):
         self.valor = valor
@@ -49,12 +49,12 @@ def _cliente_fake(respuesta_triage: str, respuesta_auditor: str | None = None, l
     return cliente
 
 
-# --- Nivel 1: guardrails deterministas, cliente LLM falso -------------------------
+# --- Level 1: deterministic guardrails, fake LLM client -------------------------
 
 def test_respuesta_valida_sin_muestreo_capa3_pasa_directo():
     llamadas = []
     cliente = _cliente_fake(_respuesta_valida(), llamadas=llamadas)
-    agente = AgenteTriage(cliente_llm=cliente, rng=_RngFijo(0.99))  # 0.99 >= tasa 0.2 -> sin muestreo
+    agente = AgenteTriage(cliente_llm=cliente, rng=_RngFijo(0.99))  # 0.99 >= rate 0.2 -> no sampling
 
     resultado = agente.triar(ENTRADA, CONTEXTO)
 
@@ -63,7 +63,7 @@ def test_respuesta_valida_sin_muestreo_capa3_pasa_directo():
     assert resultado.accion_sugerida == "investigar_pipeline_datos"
     assert resultado.confianza == pytest.approx(0.7)
     assert resultado.detalle["auditado_capa3"] is False
-    assert len(llamadas) == 1  # solo la llamada de triage, el auditor no se invocó
+    assert len(llamadas) == 1  # only the triage call, the auditor was never invoked
 
 
 def test_json_invalido_se_descarta_en_capa1():
@@ -96,16 +96,16 @@ def test_confianza_fuera_de_rango_se_descarta_en_capa1():
 
 
 def test_campo_faltante_se_descarta_en_capa1():
-    respuesta = json.dumps({"hipotesis": "algo"})  # faltan el resto de campos
+    respuesta = json.dumps({"hipotesis": "algo"})  # missing the rest of the fields
     agente = AgenteTriage(cliente_llm=_cliente_fake(respuesta), rng=_RngFijo(0.99))
     resultado = agente.triar(ENTRADA, CONTEXTO)
     assert resultado.detalle["capa_fallida"] == "capa1"
 
 
 def test_evidencia_citada_vacia_no_pasa_grounding_gratis():
-    # Hallazgo real de auditoría: una hipótesis sin evidencia citada no debe
-    # aprobarse a ciegas -- fuerza Capa 3 igual que una evidencia que no
-    # coincide con los datos reales.
+    # Real audit finding: a hypothesis with no cited evidence must not be
+    # approved blindly -- it forces Layer 3 just like evidence that
+    # doesn't match the real data.
     llamadas = []
     respuesta_sin_evidencia = _respuesta_valida(evidencia_citada=[])
     cliente = _cliente_fake(
@@ -113,14 +113,14 @@ def test_evidencia_citada_vacia_no_pasa_grounding_gratis():
         respuesta_auditor=json.dumps({"de_acuerdo": False, "razon": "no hay evidencia que respalde nada"}),
         llamadas=llamadas,
     )
-    agente = AgenteTriage(cliente_llm=cliente, rng=_RngFijo(0.99))  # sin muestreo aleatorio
+    agente = AgenteTriage(cliente_llm=cliente, rng=_RngFijo(0.99))  # no random sampling
 
     resultado = agente.triar(ENTRADA, CONTEXTO)
 
     assert resultado.detalle["paso_capa2_grounding"] is False
     assert resultado.detalle["auditado_capa3"] is True
     assert resultado.descartado is True
-    assert len(llamadas) == 2  # triage + auditor -- no pasó gratis
+    assert len(llamadas) == 2  # triage + auditor -- it didn't pass for free
 
 
 def test_grounding_fallido_dispara_capa3_aunque_no_toque_muestreo():
@@ -133,7 +133,7 @@ def test_grounding_fallido_dispara_capa3_aunque_no_toque_muestreo():
         respuesta_auditor=json.dumps({"de_acuerdo": False, "razon": "no está respaldado por los datos"}),
         llamadas=llamadas,
     )
-    agente = AgenteTriage(cliente_llm=cliente, rng=_RngFijo(0.99))  # sin muestreo aleatorio, pero capa2 falla
+    agente = AgenteTriage(cliente_llm=cliente, rng=_RngFijo(0.99))  # no random sampling, but layer2 fails
 
     resultado = agente.triar(ENTRADA, CONTEXTO)
 
@@ -151,7 +151,7 @@ def test_capa3_por_muestreo_aleatorio_con_acuerdo_deja_pasar():
         respuesta_auditor=json.dumps({"de_acuerdo": True, "razon": "razonable y respaldado"}),
         llamadas=llamadas,
     )
-    agente = AgenteTriage(cliente_llm=cliente, rng=_RngFijo(0.01))  # 0.01 < tasa 0.2 -> se muestrea
+    agente = AgenteTriage(cliente_llm=cliente, rng=_RngFijo(0.01))  # 0.01 < rate 0.2 -> gets sampled
 
     resultado = agente.triar(ENTRADA, CONTEXTO)
 
@@ -183,8 +183,8 @@ def test_respuesta_del_auditor_no_json_se_trata_como_desacuerdo():
 
 
 def test_respuesta_envuelta_en_bloque_markdown_json_se_parsea_igual():
-    # Hallazgo real: pese a "Responde SOLO en JSON", el modelo puede envolver
-    # la respuesta en ```json ... ``` -- debe parsearse igual, no descartarse.
+    # Real finding: despite "Respond ONLY in JSON", the model can wrap
+    # the response in ```json ... ``` -- it must still parse, not get discarded.
     respuesta_con_fence = "```json\n" + _respuesta_valida() + "\n```"
     agente = AgenteTriage(cliente_llm=_cliente_fake(respuesta_con_fence), rng=_RngFijo(0.99))
 
@@ -211,17 +211,17 @@ def test_sin_cliente_llm_configurado_lanza_error():
 
 def test_circuito_se_abre_tras_tasa_de_descarte_alta_y_no_llama_al_cliente():
     llamadas = []
-    cliente = _cliente_fake("esto no es json", llamadas=llamadas)  # siempre falla capa1
+    cliente = _cliente_fake("esto no es json", llamadas=llamadas)  # always fails layer1
     circuito = CircuitoTriage(ventana=4, umbral_tasa_descarte=0.5)
     agente = AgenteTriage(cliente_llm=cliente, rng=_RngFijo(0.99), circuito=circuito)
 
     for _ in range(4):
-        agente.triar(ENTRADA, CONTEXTO)  # 4 descartes seguidos -> tasa 100% >= 50%
+        agente.triar(ENTRADA, CONTEXTO)  # 4 discards in a row -> 100% rate >= 50%
     assert len(llamadas) == 4
 
     with pytest.raises(CircuitoAbierto):
         agente.triar(ENTRADA, CONTEXTO)
-    assert len(llamadas) == 4  # el circuito abierto NO gasta una llamada más
+    assert len(llamadas) == 4  # an open circuit does NOT spend another call
 
 
 def test_circuito_no_se_abre_con_menos_datos_que_la_ventana():
@@ -229,17 +229,17 @@ def test_circuito_no_se_abre_con_menos_datos_que_la_ventana():
     circuito = CircuitoTriage(ventana=10, umbral_tasa_descarte=0.5)
     agente = AgenteTriage(cliente_llm=cliente, rng=_RngFijo(0.99), circuito=circuito)
 
-    for _ in range(9):  # menos que la ventana de 10 -- no hay señal suficiente todavía
+    for _ in range(9):  # fewer than the window of 10 -- not enough signal yet
         resultado = agente.triar(ENTRADA, CONTEXTO)
         assert resultado.descartado is True
     assert circuito.abierto is False
 
 
-# --- Nivel 2: escenarios de causa real conocida (mismos que test_bitacora_decisiones.py) --
+# --- Level 2: known-real-cause scenarios (same as test_bitacora_decisiones.py) --
 
 def test_hipotesis_correcta_grounded_en_datos_reales_pasa():
-    # Escenario real: feature Amount en NaN (ver test_bitacora_decisiones.py) -- una
-    # hipótesis que cita el dato real correcto debe pasar Capa 2 sin necesitar Capa 3.
+    # Real scenario: Amount feature is NaN (see test_bitacora_decisiones.py) -- a
+    # hypothesis citing the correct real data must pass Layer 2 without needing Layer 3.
     entrada_real = {
         "tipo": "score_invalido",
         "razon": "score fuera de rango numérico válido — escalar a revisión manual",
@@ -259,9 +259,9 @@ def test_hipotesis_correcta_grounded_en_datos_reales_pasa():
 
 
 def test_hipotesis_alucinada_sin_respaldo_en_datos_reales_se_descarta():
-    # Misma entrada real, pero el LLM inventa una causa que no está en los datos --
-    # Capa 2 debe fallar y, con el auditor en desacuerdo, descartarse antes de llegar
-    # a un humano como si fuera una conclusión confiable.
+    # Same real input, but the LLM invents a cause that isn't in the data --
+    # Layer 2 must fail and, with the auditor disagreeing, it gets discarded before
+    # reaching a human as if it were a trustworthy conclusion.
     entrada_real = {
         "tipo": "score_invalido",
         "razon": "score fuera de rango numérico válido — escalar a revisión manual",
@@ -285,10 +285,10 @@ def test_hipotesis_alucinada_sin_respaldo_en_datos_reales_se_descarta():
     assert resultado.hipotesis is None
 
 
-# --- crear_cliente_claude: hallazgo real probado con ANTHROPIC_API_KEY real -------
-# `anthropic.Anthropic()` se simula (sin llamada de red real ni costo) para
-# reproducir exactamente la forma de respuesta que causó el bug real: un
-# bloque de razonamiento extendido (ThinkingBlock) antes del bloque de texto.
+# --- crear_cliente_claude: real finding, tested with a real ANTHROPIC_API_KEY -------
+# `anthropic.Anthropic()` is mocked (no real network call, no cost) to
+# reproduce exactly the response shape that caused the real bug: an
+# extended reasoning block (ThinkingBlock) before the text block.
 
 def _mockear_anthropic(monkeypatch, bloques_respuesta):
     respuesta_fake = MagicMock(content=bloques_respuesta)

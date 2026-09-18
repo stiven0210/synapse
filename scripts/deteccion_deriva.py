@@ -1,8 +1,8 @@
-"""Aplica detección de deriva (`src/deriva.py`) sobre datos reales: train
-(referencia de calibración) vs. test (el tramo más "actual" que tenemos),
-para ver si ya hay deriva natural en las ~48 horas del dataset — y una
-prueba de control positivo (deriva inyectada artificialmente) para
-confirmar que el detector sí dispara cuando debe.
+"""Applies drift detection (`src/deriva.py`) to real data: train
+(calibration reference) vs. test (the most "current" slice we have),
+to see whether there's already natural drift over the dataset's ~48
+hours — plus a positive-control test (artificially injected drift) to
+confirm the detector does fire when it should.
 """
 import json
 from pathlib import Path
@@ -20,7 +20,7 @@ def main() -> None:
     df = cargar_dataset(RUTA_DATASET)
     train, val, test = split_temporal(df)
 
-    # Control negativo: train vs. test reales -- ¿hay deriva natural en ~48h?
+    # Negative control: real train vs. test -- is there natural drift over ~48h?
     reporte_real = evaluar_deriva(train, test, columnas=FEATURES)
     resumen_real = {
         col: {"psi": round(r["psi"], 4), "interpretacion": r["psi_interpretacion"]}
@@ -31,8 +31,8 @@ def main() -> None:
     print(f"Features con deriva significativa: {reporte_real['n_features_con_deriva_psi']} / {len(FEATURES)}")
     print(f"Recomienda recalibrar: {reporte_real['recomendacion_recalibrar']}")
 
-    # Control positivo: inyecta deriva artificial en Amount (dobla la escala) -- el
-    # detector DEBE marcarla, si no, el detector mismo está roto.
+    # Positive control: inject artificial drift into Amount (double the scale) --
+    # the detector MUST flag it, otherwise the detector itself is broken.
     test_con_deriva = test.copy()
     test_con_deriva["Amount"] = test_con_deriva["Amount"] * 2.0 + 50.0
     reporte_inyectado = evaluar_deriva(train, test_con_deriva, columnas=["Amount"])

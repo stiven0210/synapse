@@ -1,11 +1,11 @@
-"""Rate limiting y control de costos para llamadas a un LLM. Mismo patrón
-usado en un proyecto anterior propio, replicado como código nuevo e
-independiente (SYNAPSE no comparte código con otros proyectos, `CLAUDE.md`).
+"""Rate limiting and cost control for LLM calls. Same pattern used in an
+earlier project of ours, replicated here as new, independent code
+(SYNAPSE shares no code with other projects, `CLAUDE.md`).
 
-Envuelve cualquier cliente LLM (`Callable[[str], str]`) y cuenta llamadas
-por día calendario. Al agotar el presupuesto, **lanza una excepción** en vez
-de seguir llamando — el objetivo es no exceder el gasto, no llevar un
-contador informativo que alguien revisa después.
+Wraps any LLM client (`Callable[[str], str]`) and counts calls per
+calendar day. Once the budget is exhausted, it **raises an exception**
+instead of continuing to call — the goal is to never exceed the spend, not
+to keep an informational counter someone checks later.
 """
 import json
 from dataclasses import dataclass, field
@@ -28,17 +28,17 @@ class LimitadorLlamadasDiarias:
     _contador: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        """Hallazgo real de auditoría: sin `ruta_estado`, el contador vive
-        solo en memoria del proceso -- pero los dos puntos de entrada reales
-        (`scripts/runner_diario.py`, `scripts/triage_veto.py`) son procesos
-        de un solo uso (por diseño, para Task Scheduler/cron: "una
-        invocación = un día"). Cada corrida creaba un `LimitadorLlamadasDiarias`
-        nuevo con presupuesto fresco, así que el límite de "N llamadas/día"
-        nunca sobrevivía entre corridas -- un reintento manual el mismo día
-        obtenía presupuesto completo de nuevo, exactamente lo que el
-        objetivo declarado ("no exceder el gasto") prohíbe. Con `ruta_estado`,
-        el contador persiste entre procesos que corren el mismo día
-        calendario."""
+        """Real audit finding: without `ruta_estado`, the counter lives only
+        in the process's memory -- but the two real entry points
+        (`scripts/runner_diario.py`, `scripts/triage_veto.py`) are
+        single-use processes (by design, for Task Scheduler/cron: "one
+        invocation = one day"). Each run used to create a fresh
+        `LimitadorLlamadasDiarias` with a fresh budget, so the "N
+        calls/day" limit never survived across runs -- a manual retry on
+        the same day got a full budget again, exactly what the stated goal
+        ("never exceed the spend") prohibits. With `ruta_estado`, the
+        counter persists across processes that run on the same calendar
+        day."""
         if self.ruta_estado is not None and self.ruta_estado.exists():
             data = json.loads(self.ruta_estado.read_text(encoding="utf-8"))
             fecha_guardada = date.fromisoformat(data["fecha"])

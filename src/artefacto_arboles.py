@@ -1,26 +1,26 @@
-"""Contrato del artefacto de política de Dominio 2 (árboles) — módulo
-neutral, mismo rol que `artefacto.py` para Dominio 1: ni `ejecutor_arboles.py`
-ni `puente_arboles.py` deben ser la fuente de la validación del otro (mismo
-hallazgo de la auditoría de Dominio 1, evitado aquí desde el principio).
+"""Domain 2 (trees) policy artifact contract — neutral module, same role
+as `artefacto.py` for Domain 1: neither `ejecutor_arboles.py` nor
+`puente_arboles.py` should be the source of the other's validation (same
+finding from the Domain 1 audit, avoided here from the start).
 
-Formato, decidido en `src/calibrador_arboles.py` (ver
-`docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md`, secciones 6 y 7):
-- El modelo (Gradient Boosting, 175 árboles) NO se serializa nodo por nodo
-  para evaluarse en caliente -- eso ya se midió más lento (30.5 µs con
-  código generado) que la alternativa elegida. Lo que el Ejecutor usa es la
-  **tabla de búsqueda v3** (`tabla_busqueda_forma`/`tabla_busqueda_plana`):
-  el score crudo del modelo (`predict_proba`) ya evaluado una sola vez, por
-  adelantado, para cada combinación posible de "bin" de umbral real
-  aprendido por el modelo -- exacta por construcción, no aproximada (ver
-  sección 6, tercera ronda).
-- `umbrales_por_feature` son los cortes reales que separan esos bins
-  (extraídos de los nodos de los árboles) -- el Ejecutor solo necesita
-  `bisect_left` sobre esta lista para saber en qué bin cae cada feature.
-- La calibración isotónica (Paso 5 del afinamiento) se guarda como
-  breakpoints `x`/`y` -- interpolación lineal en Python puro reproduce
-  `IsotonicRegression.predict()` exactamente para `out_of_bounds="clip"`
-  (verificado: máxima diferencia 0.0 contra `np.interp`, que a su vez es
-  como se implementa la interpolación en `ejecutor_arboles.py`).
+Format, decided in `src/calibrador_arboles.py` (see
+`docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md`, sections 6 and 7):
+- The model (Gradient Boosting, 175 trees) is NOT serialized node by node
+  for hot-path evaluation -- that was already measured to be slower (30.5
+  µs with generated code) than the chosen alternative. What the Executor
+  uses is the **v3 lookup table** (`tabla_busqueda_forma`/`tabla_busqueda_plana`):
+  the model's raw score (`predict_proba`) already evaluated once, ahead of
+  time, for every possible combination of "bin" from the real thresholds
+  the model learned -- exact by construction, not approximated (see
+  section 6, third round).
+- `umbrales_por_feature` are the real cut points separating those bins
+  (extracted from the trees' nodes) -- the Executor only needs
+  `bisect_left` over this list to know which bin each feature falls into.
+- The isotonic calibration (tuning Step 5) is saved as `x`/`y` breakpoints
+  -- pure-Python linear interpolation reproduces
+  `IsotonicRegression.predict()` exactly for `out_of_bounds="clip"`
+  (verified: maximum difference 0.0 against `np.interp`, which is also
+  how the interpolation is implemented in `ejecutor_arboles.py`).
 """
 CAMPOS_REQUERIDOS_ARBOLES = {
     "version", "fecha_calibracion", "modelo", "features",
@@ -31,15 +31,15 @@ CAMPOS_REQUERIDOS_ARBOLES = {
 
 
 class ArtefactoArbolesInvalido(Exception):
-    """El artefacto no cumple el contrato de Dominio 2 -- mismo principio que
-    `ArtefactoInvalido` de Dominio 1 (ADR_002, invariante 1): sin artefacto
-    válido, no hay decisión automática."""
+    """The artifact doesn't satisfy the Domain 2 contract -- same principle
+    as Domain 1's `ArtefactoInvalido` (ADR_002, invariant 1): no valid
+    artifact, no automated decision."""
 
 
 def _es_numero(valor) -> bool:
-    # Igual que artefacto.py (Dominio 1): NaN se acepta aquí a propósito -- la protección
-    # contra un score NaN es responsabilidad de veto.py (ADR_002, invariante 3), no de esta
-    # validación de forma/contenido. Excluirlo aquí solo movería el chequeo al lugar equivocado.
+    # Same as artefacto.py (Domain 1): NaN is accepted here on purpose -- protection
+    # against a NaN score is veto.py's responsibility (ADR_002, invariant 3), not this
+    # shape/content validation. Excluding it here would just move the check to the wrong place.
     return isinstance(valor, (int, float)) and not isinstance(valor, bool)
 
 

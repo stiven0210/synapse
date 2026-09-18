@@ -24,7 +24,7 @@ ARTEFACTO = {
 
 
 def test_artefacto_valido_no_lanza():
-    validar_artefacto_arboles(ARTEFACTO)  # no debe lanzar
+    validar_artefacto_arboles(ARTEFACTO)  # must not raise
 
 
 def test_falta_campo_requerido():
@@ -34,7 +34,7 @@ def test_falta_campo_requerido():
 
 
 def test_umbrales_por_feature_debe_tener_una_entrada_por_feature():
-    invalido = {**ARTEFACTO, "umbrales_por_feature": {"amt": [100.0]}}  # faltan las otras 4
+    invalido = {**ARTEFACTO, "umbrales_por_feature": {"amt": [100.0]}}  # missing the other 4
     with pytest.raises(ArtefactoArbolesInvalido):
         validar_artefacto_arboles(invalido)
 
@@ -46,13 +46,13 @@ def test_umbrales_por_feature_debe_estar_ordenado_sin_duplicados():
 
 
 def test_tabla_busqueda_forma_debe_coincidir_con_umbrales():
-    invalido = {**ARTEFACTO, "tabla_busqueda_forma": [3, 1, 1, 1, 1]}  # amt tiene 1 umbral -> debería ser 2, no 3
+    invalido = {**ARTEFACTO, "tabla_busqueda_forma": [3, 1, 1, 1, 1]}  # amt has 1 threshold -> should be 2, not 3
     with pytest.raises(ArtefactoArbolesInvalido):
         validar_artefacto_arboles(invalido)
 
 
 def test_tabla_busqueda_plana_debe_tener_el_tamano_esperado():
-    invalido = {**ARTEFACTO, "tabla_busqueda_plana": [0.1, 0.9, 0.5]}  # forma dice 2*1*1*1*1=2, no 3
+    invalido = {**ARTEFACTO, "tabla_busqueda_plana": [0.1, 0.9, 0.5]}  # shape says 2*1*1*1*1=2, not 3
     with pytest.raises(ArtefactoArbolesInvalido):
         validar_artefacto_arboles(invalido)
 

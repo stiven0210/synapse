@@ -1,17 +1,16 @@
-r"""Punto de entrada para Task Scheduler (o cron) — una invocación = un
-"día" de operación real. Pensado para correr sin supervisión: cada corrida
-deja un renglón en `data/runner_log.jsonl` (append-only, igual que la
-bitácora) para que se pueda revisar la historia días después sin haber
-estado mirando la consola.
+r"""Entry point for Task Scheduler (or cron) — one invocation = one real
+operating "day." Meant to run unsupervised: every run leaves a row in
+`data/runner_log.jsonl` (append-only, same as the decision log) so the
+history can be reviewed days later without having watched the console.
 
-Registrar en Windows Task Scheduler (PowerShell, como administrador):
+Register in Windows Task Scheduler (PowerShell, as administrator):
 
     $accion = New-ScheduledTaskAction -Execute "python" `
         -Argument "scripts\runner_diario.py" -WorkingDirectory "C:\proyectos\synapse"
     $disparador = New-ScheduledTaskTrigger -Daily -At 3am
     Register-ScheduledTask -TaskName "SYNAPSE-runner-diario" -Action $accion -Trigger $disparador
 
-O por CLI (cmd.exe):
+Or via CLI (cmd.exe):
 
     schtasks /create /tn "SYNAPSE-runner-diario" /tr "python C:\proyectos\synapse\scripts\runner_diario.py" /sc daily /st 03:00
 """
@@ -32,7 +31,7 @@ RUTA_REPORTE_DERIVA = RAIZ / "data" / "reporte_deriva.json"
 RUTA_LOG = RAIZ / "data" / "runner_log.jsonl"
 RUTA_ESTADO_LIMITADOR = RAIZ / "data" / "estado_limitador_triage.json"
 
-TAMANO_LOTE = 5000  # filas "nuevas" por corrida -- a este ritmo, el dataset completo (~285k filas) dura ~57 corridas
+TAMANO_LOTE = 5000  # "new" rows per run -- at this pace, the full dataset (~285k rows) lasts ~57 runs
 
 
 def _armar_contexto_triage() -> dict:

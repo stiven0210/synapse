@@ -1,17 +1,17 @@
-"""Calibrador de árboles (Dominio 2, capa lenta) — entrena el Gradient
-Boosting validado en `docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md` (secciones
-5-7 y 15.1-16: modelo final `HistGradientBoostingClassifier(max_depth=3,
-learning_rate=0.05, max_iter=200)`, 6 features, calibración isotónica) sobre
-`data/raw/sparkov_2013_2026.csv`, y produce el artefacto de
-`artefacto_arboles.py` -- tabla de búsqueda v3 incluida, no los árboles
-crudos (ver esa sección 6, tercera ronda: la tabla es exacta por
-construcción y más rápida que evaluar árboles en caliente).
+"""Tree calibrator (Domain 2, slow layer) — trains the Gradient Boosting
+model validated in `docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md` (sections
+5-7 and 15.1-16: final model `HistGradientBoostingClassifier(max_depth=3,
+learning_rate=0.05, max_iter=200)`, 6 features, isotonic calibration) on
+`data/raw/sparkov_2013_2026.csv`, and produces the artifact from
+`artefacto_arboles.py` -- the v3 lookup table included, not the raw trees
+(see that section 6, third round: the table is exact by construction and
+faster than evaluating trees on the hot path).
 
-No se toca `src/calibrador.py` (Dominio 1) -- se reutiliza sin modificar
-`split_temporal` (puramente posicional, no depende de columnas) y
-`calcular_features_recursivas_batch`/`EstadoRecursivoGlobal` de
-`features_recursivas.py` para `conteo_ventana_global`, que es la MISMA
-métrica global de Dominio 1, no una nueva definición.
+`src/calibrador.py` (Domain 1) is left untouched -- reused as-is:
+`split_temporal` (purely positional, doesn't depend on columns) and
+`calcular_features_recursivas_batch`/`EstadoRecursivoGlobal` from
+`features_recursivas.py` for `conteo_ventana_global`, which is the SAME
+global metric from Domain 1, not a new definition.
 """
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,23 +33,23 @@ from src.features_recursivas_cuenta import (
 )
 
 VERSION_ARTEFACTO = 1
-# 6ta feature agregada en la sección 16 del doc (`frecuencia_categoria_expandida`, mejora
-# validada en la sección 15.1: AUC-PR 0.914+-0.030 -> 0.947+-0.027 en 5-fold walk-forward).
+# 6th feature added in section 16 of the doc (`frecuencia_categoria_expandida`, improvement
+# validated in section 15.1: AUC-PR 0.914+-0.030 -> 0.947+-0.027 in 5-fold walk-forward).
 FEATURES_ARBOLES = [
     "amt", "hora", "conteo_ventana_global", "monto_ewma_cuenta", "huella_categoria_cuenta",
     "frecuencia_categoria_expandida",
 ]
-# Subconjunto a pasarle a `deriva.py::evaluar_deriva()` -- excluye `frecuencia_categoria_expandida`
-# a propósito (sección 19 del doc: es no estacionaria por diseño, dispara recalibración en el
-# 85% de las transiciones año a año frente al 23% del resto, falsa alarma constante, no señal
-# real de deterioro). Sin disparador de recalibración propio todavía para Dominio 2 -- esta
-# constante deja el conjunto correcto ya decidido para cuando se construya uno.
+# Subset to pass to `deriva.py::evaluar_deriva()` -- excludes `frecuencia_categoria_expandida`
+# on purpose (section 19 of the doc: it's non-stationary by design, triggering recalibration on
+# 85% of year-over-year transitions vs. 23% for the rest -- a constant false alarm, not real
+# deterioration signal). No dedicated recalibration trigger for Domain 2 yet -- this
+# constant leaves the right set already decided for when one gets built.
 FEATURES_MONITOREO_DERIVA = [f for f in FEATURES_ARBOLES if f != "frecuencia_categoria_expandida"]
 COLUMNAS_CRUDAS_REQUERIDAS = {"cc_num", "amt", "unix_time", "category", "is_fraud"}
 
-# Configuración ganadora del Paso 4 del afinamiento (docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md),
-# actualizada en la sección 21: learning_rate 0.05 -> 0.1 (validado con 5-fold walk-forward,
-# AUC-PR 0.947+-0.027 -> 0.957+-0.024, mejora real de +0.0098, mejor o empatado en 4 de 5 folds).
+# Winning configuration from tuning Step 4 (docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md),
+# updated in section 21: learning_rate 0.05 -> 0.1 (validated with 5-fold walk-forward,
+# AUC-PR 0.947+-0.027 -> 0.957+-0.024, a real +0.0098 improvement, better or tied in 4 of 5 folds).
 MAX_DEPTH = 3
 LEARNING_RATE = 0.1
 MAX_ITER = 200
@@ -57,30 +57,30 @@ RANDOM_STATE = 42
 
 
 def cargar_dataset(ruta: Path) -> pd.DataFrame:
-    """Carga y ordena `sparkov_2013_2026.csv` -- NO calcula todavía las
-    features recursivas (a diferencia de `calibrador.cargar_dataset`):
-    `huella_categoria_cuenta` necesita `frecuencia_poblacional_categoria`
-    aprendida en TRAIN, y TRAIN se define por posición sobre este mismo
-    dataframe -- ver `construir_features` y `entrenar_pipeline_completo`."""
+    """Loads and sorts `sparkov_2013_2026.csv` -- does NOT compute the
+    recursive features yet (unlike `calibrador.cargar_dataset`):
+    `huella_categoria_cuenta` needs `frecuencia_poblacional_categoria`
+    learned on TRAIN, and TRAIN is defined positionally over this same
+    dataframe -- see `construir_features` and `entrenar_pipeline_completo`."""
     df = pd.read_csv(ruta)
     if df.empty:
         raise DatasetInvalido(f"{ruta} no tiene filas")
     faltantes = COLUMNAS_CRUDAS_REQUERIDAS - set(df.columns)
     if faltantes:
         raise DatasetInvalido(f"{ruta} no tiene las columnas requeridas: {faltantes}")
-    # kind="stable": mismo motivo que calibrador.cargar_dataset (Dominio 1) -- unix_time con
-    # resolución de 1 segundo y alta frecuencia de transacciones produce empates reales.
+    # kind="stable": same reason as calibrador.cargar_dataset (Domain 1) -- unix_time with
+    # 1-second resolution and high transaction frequency produces real ties.
     return df.sort_values("unix_time", kind="stable").reset_index(drop=True)
 
 
 def construir_features(df: pd.DataFrame, frecuencia_categoria: dict) -> pd.DataFrame:
-    """Agrega las 6 features finales sobre TODO el historial continuo (antes
-    de partir en train/val/test -- mismo principio que Dominio 1: el estado
-    recursivo no se reinicia en un corte arbitrario). `n_categorias` para
-    `frecuencia_categoria_expandida` se deriva de `frecuencia_categoria`
-    (aprendida de TRAIN) -- mismo vocabulario de categorías conocidas que ya
-    usa el respaldo poblacional de la huella, sin agregar un campo nuevo al
-    artefacto."""
+    """Adds the 6 final features over the ENTIRE continuous history (before
+    splitting into train/val/test -- same principle as Domain 1: recursive
+    state isn't reset at an arbitrary cut). `n_categorias` for
+    `frecuencia_categoria_expandida` is derived from `frecuencia_categoria`
+    (learned from TRAIN) -- the same known-category vocabulary the
+    footprint's population fallback already uses, without adding a new
+    field to the artifact."""
     df_global = calcular_features_recursivas_batch(df.rename(columns={"amt": "Amount", "unix_time": "Time"}))
     df = df.copy()
     df["conteo_ventana_global"] = df_global["conteo_ventana_global"].to_numpy()
@@ -90,10 +90,10 @@ def construir_features(df: pd.DataFrame, frecuencia_categoria: dict) -> pd.DataF
 
 
 def _mejor_umbral_por_f1(y_true: np.ndarray, scores: np.ndarray) -> float:
-    """Copia local intencional de `calibrador._mejor_umbral_por_f1` (privada,
-    no se importa entre módulos de dominios distintos -- ver docstring del
-    módulo). Misma lógica: busca sobre los scores realmente observados, sin
-    grilla fija topada."""
+    """Intentional local copy of `calibrador._mejor_umbral_por_f1` (private,
+    not imported across different domain modules -- see the module
+    docstring). Same logic: searches over the actually observed scores, no
+    capped fixed grid."""
     precisiones, recalls, umbrales = precision_recall_curve(y_true, scores)
     if len(umbrales) == 0:
         return 0.5
@@ -104,11 +104,11 @@ def _mejor_umbral_por_f1(y_true: np.ndarray, scores: np.ndarray) -> float:
 
 
 def _extraer_umbrales_por_feature(modelo: HistGradientBoostingClassifier, features: list) -> dict:
-    """Recorre los nodos internos de los 175 árboles y agrupa, por índice de
-    feature, el conjunto de umbrales reales (`num_threshold`) que el modelo
-    aprendió -- son los cortes que definen los bins exactos de la tabla v3
-    (ver `docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md`, sección 6, tercera
-    ronda)."""
+    """Walks the internal nodes of the 175 trees and groups, by feature
+    index, the set of real thresholds (`num_threshold`) the model learned
+    -- these are the cut points that define the v3 table's exact bins (see
+    `docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md`, section 6, third
+    round)."""
     umbrales_por_indice = {i: set() for i in range(len(features))}
     for arboles_iteracion in modelo._predictors:
         for arbol in arboles_iteracion:
@@ -119,14 +119,14 @@ def _extraer_umbrales_por_feature(modelo: HistGradientBoostingClassifier, featur
 
 
 def _construir_tabla_busqueda(modelo: HistGradientBoostingClassifier, features: list, umbrales_por_feature: dict) -> tuple:
-    """Evalúa el modelo UNA VEZ por cada combinación de bin (vectorizado vía
-    `predict_proba`, no en Python puro -- esto corre en calibración, no en el
-    camino caliente). Cada representante se elige para que
-    `bisect.bisect_left(umbrales, representante)` devuelva exactamente el
-    índice de bin que le corresponde (verificado con test unitario en
-    `tests/test_calibrador_arboles.py`); como ningún árbol distingue dos
-    valores dentro del mismo intervalo entre umbrales consecutivos, la tabla
-    queda exacta por construcción."""
+    """Evaluates the model ONCE per bin combination (vectorized via
+    `predict_proba`, not in pure Python -- this runs at calibration time,
+    not on the hot path). Each representative is chosen so that
+    `bisect.bisect_left(umbrales, representante)` returns exactly the bin
+    index it belongs to (verified with a unit test in
+    `tests/test_calibrador_arboles.py`); since no tree distinguishes
+    between two values within the same interval between consecutive
+    thresholds, the table ends up exact by construction."""
     representantes_por_feature = []
     for f in features:
         umbrales = umbrales_por_feature[f]
@@ -141,7 +141,7 @@ def _construir_tabla_busqueda(modelo: HistGradientBoostingClassifier, features: 
         tamano_total *= n
 
     grillas = np.meshgrid(*[np.array(r) for r in representantes_por_feature], indexing="ij")
-    X_repr = np.stack([g.ravel() for g in grillas], axis=1)  # (tamano_total, n_features), orden C == row-major
+    X_repr = np.stack([g.ravel() for g in grillas], axis=1)  # (tamano_total, n_features), C order == row-major
     assert X_repr.shape == (tamano_total, len(features))
 
     raw_scores = modelo.predict_proba(X_repr)[:, 1]
@@ -149,12 +149,12 @@ def _construir_tabla_busqueda(modelo: HistGradientBoostingClassifier, features: 
 
 
 def _calibrar_detalle(df_train: pd.DataFrame, df_val: pd.DataFrame, frecuencia_categoria: dict) -> tuple:
-    """Misma lógica que `calibrar()`, pero además devuelve el modelo
-    sklearn ya entrenado -- necesario para la verificación bit-exacta contra
-    `predict_proba()` real en `tests/test_ejecutor_arboles.py` y en scripts
-    de validación. `calibrar()` es la API pública real (solo el artefacto,
-    igual que `calibrador.calibrar` de Dominio 1); esta función privada
-    existe solo para no reentrenar dos veces en tests."""
+    """Same logic as `calibrar()`, but also returns the already-trained
+    sklearn model -- needed for the bit-exact verification against the real
+    `predict_proba()` in `tests/test_ejecutor_arboles.py` and validation
+    scripts. `calibrar()` is the real public API (artifact only, same as
+    Domain 1's `calibrador.calibrar`); this private function exists only
+    so tests don't have to retrain twice."""
     if df_train["is_fraud"].sum() == 0:
         raise DatasetInvalido("df_train no tiene ningún caso positivo -- no hay nada que aprender")
     if df_val["is_fraud"].sum() == 0:
@@ -173,9 +173,9 @@ def _calibrar_detalle(df_train: pd.DataFrame, df_val: pd.DataFrame, frecuencia_c
 
     scores_val_crudos = modelo.predict_proba(X_val)[:, 1]
 
-    # Isotonic SIEMPRE ajustada en VAL, nunca en TEST (Paso 5 del afinamiento) -- necesario
-    # porque los scores crudos están mal calibrados en el rango medio-alto (sample_weight
-    # de class_weight="balanced" afecta las probabilidades, no el orden).
+    # Isotonic is ALWAYS fit on VAL, never on TEST (tuning Step 5) -- needed
+    # because the raw scores are poorly calibrated in the mid-to-high range (the
+    # sample_weight from class_weight="balanced" affects probabilities, not the ranking).
     isotonica = IsotonicRegression(out_of_bounds="clip")
     scores_val_calibrados = isotonica.fit_transform(scores_val_crudos, y_val)
 
@@ -210,21 +210,22 @@ def _calibrar_detalle(df_train: pd.DataFrame, df_val: pd.DataFrame, frecuencia_c
 
 
 def calibrar(df_train: pd.DataFrame, df_val: pd.DataFrame, frecuencia_categoria: dict) -> dict:
-    """API pública: entrena y devuelve solo el artefacto de
-    `artefacto_arboles.py` (igual que `calibrador.calibrar` de Dominio 1).
-    `df_train`/`df_val` ya deben traer las 6 features (`construir_features`)."""
+    """Public API: trains and returns only the artifact from
+    `artefacto_arboles.py` (same as Domain 1's `calibrador.calibrar`).
+    `df_train`/`df_val` must already carry the 6 features
+    (`construir_features`)."""
     artefacto, _modelo = _calibrar_detalle(df_train, df_val, frecuencia_categoria)
     return artefacto
 
 
 def entrenar_pipeline_completo(ruta_dataset: Path) -> dict:
-    """Orquesta el pipeline completo: carga, split posicional 60/20/20 SOLO
-    para aprender `frecuencia_poblacional_categoria` desde TRAIN crudo,
-    construye features sobre el historial continuo completo, vuelve a
-    partir con los mismos límites, y calibra. Devuelve
+    """Orchestrates the full pipeline: loads, does a positional 60/20/20
+    split ONLY to learn `frecuencia_poblacional_categoria` from raw TRAIN,
+    builds features over the entire continuous history, splits again with
+    the same boundaries, and calibrates. Returns
     `{"artefacto":..., "modelo":..., "df_train":..., "df_val":..., "df_test":...}`
-    -- `df_test` y `modelo` son para scripts de validación/tests, nunca para
-    servir decisiones (eso es exclusivamente `EjecutorArboles`)."""
+    -- `df_test` and `modelo` are for validation scripts/tests, never for
+    serving decisions (that's exclusively `EjecutorArboles`)."""
     df = cargar_dataset(ruta_dataset)
     df_train_crudo, _, _ = split_temporal(df)
     frecuencia_categoria = calcular_frecuencia_poblacional_categoria(df_train_crudo)

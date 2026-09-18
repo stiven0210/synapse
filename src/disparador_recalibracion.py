@@ -1,16 +1,16 @@
-"""Disparador de recalibración — conecta la detección de deriva
-(`src/deriva.py`) con el mecanismo de recalibración (`src/calibrador.py` +
-`src/puente.py`). Es el job periódico que el plan de trabajo señalaba como
-faltante: compara la ventana de referencia (con la que se calibró el
-artefacto vigente) contra una ventana reciente de producción, y si hay
-deriva significativa en alguna feature O en el score de salida del modelo,
-recalibra sobre la ventana reciente y publica el nuevo artefacto.
+"""Recalibration trigger — connects drift detection (`src/deriva.py`) with
+the recalibration mechanism (`src/calibrador.py` + `src/puente.py`). This
+is the periodic job the work plan flagged as missing: compares the
+reference window (the one the current artifact was calibrated on) against
+a recent production window, and if there's significant drift in any
+feature OR in the model's output score, recalibrates over the recent
+window and publishes the new artifact.
 
-No decide en tiempo real y no toca el estado recursivo del Ejecutor — un
-proceso de decisión en marcha (`CicloDecision`) debe llamar
-`recargar_artefacto()` por su cuenta después de ver que este job publicó
-una versión nueva; ese mecanismo ya existe y es responsabilidad de
-`ciclo.py`, no de este módulo.
+Doesn't decide in real time and doesn't touch the Executor's recursive
+state — a running decision process (`CicloDecision`) must call
+`recargar_artefacto()` on its own after seeing this job publish a new
+version; that mechanism already exists and is `ciclo.py`'s
+responsibility, not this module's.
 """
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,13 +44,13 @@ class _AnalisisConArtefactoVigente:
 
 
 def _analizar_con_artefacto_vigente(reporte_features: dict, df_referencia: pd.DataFrame, df_actual: pd.DataFrame, ruta_artefacto: Path) -> _AnalisisConArtefactoVigente:
-    """Pondera la deriva por feature y evalúa la deriva del score de
-    salida, ambas usando el artefacto VIGENTE (antes de una posible
-    recalibración) -- ver `deriva.ponderar_deriva_por_coeficiente` y
-    `deriva.evaluar_deriva_score`. Si no hay artefacto vigente legible
-    todavía (primera corrida, archivo corrupto), ninguna de las dos se
-    puede calcular -- no bloquea la evaluación de deriva por feature, que
-    sigue siendo el criterio principal en ese caso."""
+    """Weighs the per-feature drift and evaluates the output score's
+    drift, both using the CURRENT artifact (before any possible
+    recalibration) -- see `deriva.ponderar_deriva_por_coeficiente` and
+    `deriva.evaluar_deriva_score`. If there's no readable current artifact
+    yet (first run, corrupt file), neither can be computed -- this doesn't
+    block the per-feature drift evaluation, which remains the main
+    criterion in that case."""
     try:
         artefacto_vigente = leer_vigente(ruta_artefacto)
     except (FileNotFoundError, ArtefactoInvalido):
@@ -78,21 +78,22 @@ def evaluar_y_recalibrar_si_hace_falta(
     columnas_deriva: list,
     ruta_artefacto: Path,
 ) -> ResultadoDisparador:
-    """`df_referencia` es la ventana con la que se calibró el artefacto
-    vigente; `df_actual` es la ventana reciente de producción a evaluar y,
-    si hace falta, la que se usa para recalibrar (partida internamente en
-    train/val vía `split_temporal`, igual que en la calibración original).
+    """`df_referencia` is the window the current artifact was calibrated
+    on; `df_actual` is the recent production window to evaluate and, if
+    needed, the one used to recalibrate (internally split into train/val
+    via `split_temporal`, same as in the original calibration).
 
-    Recomienda recalibrar si CUALQUIERA de las dos señales es significativa:
-    deriva por feature (`evaluar_deriva`, PSI > 0.25 en alguna) o deriva del
-    score de salida (`evaluar_deriva_score`) -- el score agrega el efecto
-    neto de deriva en todas las features y puede moverse aunque ninguna
-    cruce sola el umbral (ver `docs/PLAN_DE_TRABAJO.md`).
+    Recommends recalibrating if EITHER signal is significant: per-feature
+    drift (`evaluar_deriva`, PSI > 0.25 on any one) or output score drift
+    (`evaluar_deriva_score`) -- the score aggregates the net drift effect
+    across all features and can move even if none crosses the threshold
+    alone (see `docs/PLAN_DE_TRABAJO.md`).
 
-    Si `df_actual` no tiene casos positivos suficientes para recalibrar con
-    seguridad (`DatasetInvalido`), no se publica nada — el artefacto vigente
-    queda intacto y el error se reporta para revisión humana en vez de
-    fallar en silencio o degradar el modelo con una calibración mala."""
+    If `df_actual` doesn't have enough positive cases to recalibrate
+    safely (`DatasetInvalido`), nothing is published — the current
+    artifact stays intact and the error is reported for human review
+    instead of failing silently or degrading the model with a bad
+    calibration."""
     reporte_features = evaluar_deriva(df_referencia, df_actual, columnas=columnas_deriva)
     analisis = _analizar_con_artefacto_vigente(reporte_features, df_referencia, df_actual, ruta_artefacto)
     recomienda_recalibrar = reporte_features["recomendacion_recalibrar"] or analisis.recomienda_por_score

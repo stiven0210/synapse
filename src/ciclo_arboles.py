@@ -1,16 +1,17 @@
-"""CicloDecisionArboles — punto de entrada sancionado para Dominio 2, paralelo
-a `CicloDecision` (Dominio 1, no modificado). Mismas 3 garantías que su
-contraparte (ver `ciclo.py`): el artefacto siempre pasa por el Puente, el
-resultado del Ejecutor siempre pasa por `veto.py::evaluar` (reusado sin
-modificar -- es independiente del modelo por diseño), y cualquier excepción
-del Ejecutor se convierte en escalar a revisión manual en vez de propagarse.
+"""CicloDecisionArboles — the sanctioned entry point for Domain 2, parallel
+to `CicloDecision` (Domain 1, unmodified). Same 3 guarantees as its
+counterpart (see `ciclo.py`): the artifact always goes through the Bridge,
+the Executor's result always goes through `veto.py::evaluar` (reused
+without modification -- it's model-independent by design), and any
+Executor exception is turned into an escalation for manual review instead
+of propagating.
 
-**Por qué existe un Ciclo paralelo y no uno genérico**: el propio
-`docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md` (sección 6) señala esto como
-la opción correcta -- generalizar la interfaz recién after un segundo
-dominio real, no antes; forzar hoy un contrato común entre un Ejecutor de
-producto punto y uno de tabla de búsqueda sería abstraer sin necesidad
-comprobada todavía.
+**Why a parallel Cycle exists instead of a generic one**:
+`docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md` itself (section 6) points to
+this as the right call -- generalize the interface only after a second
+real domain, not before; forcing a common contract today between a
+dot-product Executor and a lookup-table one would be abstracting without
+proven need yet.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,13 +29,14 @@ class CicloDecisionArboles:
     _ejecutor: EjecutorArboles = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        artefacto = leer_vigente(self.ruta_artefacto)  # puede lanzar -- primera carga sin fallback
+        artefacto = leer_vigente(self.ruta_artefacto)  # can raise -- first load has no fallback
         self._ejecutor = EjecutorArboles(artefacto=artefacto)
 
     def recargar_artefacto(self) -> bool:
-        """Igual que `CicloDecision.recargar_artefacto()`: conserva el
-        estado recursivo acumulado (global y por cuenta) y no reemplaza el
-        Ejecutor vigente si el artefacto nuevo está ausente/corrupto/inválido."""
+        """Same as `CicloDecision.recargar_artefacto()`: preserves the
+        accumulated recursive state (global and per-account) and doesn't
+        replace the current Executor if the new artifact is
+        missing/corrupt/invalid."""
         try:
             artefacto_nuevo = leer_vigente(self.ruta_artefacto)
         except (FileNotFoundError, ArtefactoArbolesInvalido, ValueError):
@@ -47,10 +49,10 @@ class CicloDecisionArboles:
         return True
 
     def decidir(self, transaccion: dict) -> DecisionFinal:
-        """Único método para tomar una decisión real en Dominio 2. `veto.py`
-        espera la clave `Amount` (contrato de Dominio 1) -- se agrega aquí un
-        alias de `amt` sin modificar `veto.py`, que es intencionalmente
-        independiente del esquema de columnas de cualquier dominio."""
+        """The one method for making a real decision in Domain 2. `veto.py`
+        expects the `Amount` key (Domain 1's contract) -- an `amt` alias is
+        added here without modifying `veto.py`, which is intentionally
+        independent of any domain's column schema."""
         try:
             resultado = self._ejecutor.decidir(transaccion)
         except Exception as e:

@@ -1,25 +1,24 @@
-"""Runner diario — el "despliegue real, aunque sea chico" que faltaba: sin
-tráfico real de producción, simula uno real avanzando por el dataset
-histórico en lotes, un lote por invocación, con estado persistente entre
-corridas (igual que un servicio real que se reinicia todos los días). Es lo
-que hace falta para que el Nivel 3 del agente de triage (¿de verdad ahorra
-esfuerzo humano?) tenga alguna vez datos reales que evaluar — antes de
-esto, no había ningún proceso corriendo el tiempo suficiente para
-acumularlos.
+"""Daily runner — the "real deployment, even if small" that was missing:
+with no real production traffic, it simulates one by advancing through
+the historical dataset in batches, one batch per invocation, with state
+persisted across runs (the same as a real service that restarts every
+day). This is what's needed for the triage agent's Level 3 question (does
+it actually save human effort?) to ever have real data to evaluate against
+— before this, no process ran long enough to accumulate any.
 
-Cada invocación (`correr_ciclo_diario`):
-1. Si es la primera vez, calibra un artefacto inicial (bootstrap) con el
-   primer `frac_bootstrap` del dataset y lo publica.
-2. Retoma el estado recursivo del Ejecutor donde quedó la corrida anterior
-   (nunca se reinicia -- misma semántica causal de siempre) y procesa el
-   siguiente lote de `tamano_lote` filas.
-3. Evalúa deriva (features + score) entre el lote anterior y este, y
-   recalibra si hace falta (`disparador_recalibracion.py`).
-4. Si hay un agente de triage configurado, intenta triar los
-   escalamientos operativos nuevos que dejó este lote.
+Each invocation (`correr_ciclo_diario`):
+1. If it's the first time, calibrates an initial (bootstrap) artifact
+   using the first `frac_bootstrap` of the dataset and publishes it.
+2. Picks the Executor's recursive state back up where the previous run
+   left off (never reset -- the same causal semantics as always) and
+   processes the next batch of `tamano_lote` rows.
+3. Evaluates drift (features + score) between the previous batch and this
+   one, and recalibrates if needed (`disparador_recalibracion.py`).
+4. If a triage agent is configured, attempts to triage the new
+   operational escalations this batch left behind.
 
-No es el camino caliente -- es el job de mantenimiento, corre una vez al
-día (o con la cadencia que se programe), nunca dentro de `CicloDecision.decidir()`.
+Not the hot path -- this is the maintenance job, running once a day (or
+whatever cadence is scheduled), never inside `CicloDecision.decidir()`.
 """
 import json
 from collections import deque
@@ -58,14 +57,14 @@ def _deserializar_estado(data: dict) -> EstadoRecursivoGlobal:
         monto_ewma=data["monto_ewma"],
         tiempos_ventana=deque(data["tiempos_ventana"]),
     )
-    estado.ultimo_tiempo_visto = data["ultimo_tiempo_visto"]  # init=False -- se asigna después de construir
+    estado.ultimo_tiempo_visto = data["ultimo_tiempo_visto"]  # init=False -- assigned after construction
     return estado
 
 
 def guardar_estado_runner(indice_procesado: int, ejecutor: Ejecutor, ruta: Path) -> None:
-    """Escritura atómica (archivo temporal + reemplazo), mismo patrón que
-    `puente.publicar()` -- una corrida interrumpida a mitad de escritura no
-    debe dejar el estado corrupto."""
+    """Atomic write (temp file + replace), same pattern as
+    `puente.publicar()` -- a run interrupted mid-write must not leave the
+    state corrupted."""
     data = {"indice_procesado": indice_procesado, "estado_ejecutor": _serializar_estado(ejecutor.estado)}
     ruta.parent.mkdir(parents=True, exist_ok=True)
     ruta_temporal = ruta.with_name(ruta.name + ".tmp")
@@ -104,21 +103,20 @@ def correr_ciclo_diario(
     estado_runner = cargar_estado_runner(ruta_estado_runner)
 
     if estado_runner is None:
-        # Primera corrida: bootstrap -- calibra con el primer frac_bootstrap
-        # del dataset (nunca con todo, para dejar historia real que
-        # "llegue" en corridas siguientes) y publica el artefacto inicial.
+        # First run: bootstrap -- calibrates on the first frac_bootstrap
+        # of the dataset (never all of it, to leave real history that
+        # "arrives" in later runs) and publishes the initial artifact.
         fin_bootstrap = int(len(df) * frac_bootstrap)
         train, val, _ = split_temporal(df.iloc[:fin_bootstrap])
         artefacto = calibrar(train, val)
         publicar(artefacto, ruta_artefacto)
         ciclo = CicloDecision(ruta_artefacto=ruta_artefacto)
 
-        # Alimenta el estado recursivo con la historia de calibración, sin
-        # registrarla en la bitácora (es historia, no una decisión nueva) --
-        # mismo principio que scripts/validacion_end_to_end.py: el estado
-        # nunca se reinicia en un corte arbitrario. El procesamiento de
-        # "lo que llega" arranca DESPUÉS de la ventana de bootstrap, no
-        # sobre ella.
+        # Feeds the recursive state with the calibration history, without
+        # logging it (it's history, not a new decision) -- same principle
+        # as scripts/validacion_end_to_end.py: state is never reset at an
+        # arbitrary cut. Processing "what comes in" starts AFTER the
+        # bootstrap window, not over it.
         columnas_bootstrap = artefacto["features"] + ["Time"]
         for fila in df.iloc[:fin_bootstrap][columnas_bootstrap].to_dict("records"):
             ciclo.decidir(fila)
@@ -126,12 +124,12 @@ def correr_ciclo_diario(
     else:
         ciclo = CicloDecision(ruta_artefacto=ruta_artefacto)
         estado_restaurado = _deserializar_estado(estado_runner["estado_ejecutor"])
-        # No hay una vía pública para inyectar un estado recursivo restaurado al
-        # construir CicloDecision -- se reconstruye el Ejecutor directamente, mismo
-        # patrón que ya usa CicloDecision.recargar_artefacto() internamente
-        # (`Ejecutor(artefacto=..., estado=self._ejecutor.estado)`). Se prefiere esto
-        # a tocar ciclo.py (ya pasó 2 rondas de auditoría) por una necesidad que solo
-        # tiene este runner.
+        # There's no public way to inject a restored recursive state when
+        # constructing CicloDecision -- the Executor is rebuilt directly, the same
+        # pattern CicloDecision.recargar_artefacto() already uses internally
+        # (`Ejecutor(artefacto=..., estado=self._ejecutor.estado)`). This is preferred
+        # over touching ciclo.py (already through 2 audit rounds) for a need that
+        # only this runner has.
         ciclo._ejecutor = Ejecutor(artefacto=ciclo._ejecutor.artefacto, estado=estado_restaurado)
         indice_procesado = estado_runner["indice_procesado"]
 
@@ -145,20 +143,19 @@ def correr_ciclo_diario(
     lote = df.iloc[indice_procesado:fin_lote]
     columnas = ciclo._ejecutor.artefacto["features"] + ["Time"]
 
-    # Hallazgo crítico de auditoría: si una corrida anterior se interrumpe
-    # (crash, Task Scheduler matando el proceso, corte de luz) DESPUÉS de
-    # registrar una decisión pero ANTES de persistir el nuevo índice, la
-    # siguiente corrida retomaba desde el índice viejo y reprocesaba -- y
-    # re-registraba -- esas mismas filas, duplicándolas en la bitácora.
-    # No hay forma de hacer atómica una escritura a través de dos archivos
-    # distintos (bitácora + estado) sin un log transaccional real, así que
-    # se acota el daño al mínimo posible: se guarda el estado fila por
-    # fila (nunca una vez por lote completo), y antes de registrar cada
-    # fila se comprueba si ya quedó registrada por un intento anterior
-    # interrumpido -- si es así, igual se vuelve a pasar por `decidir()`
-    # (el estado recursivo restaurado es el de ANTES de esa fila, hay que
-    # re-derivarlo para no perder continuidad causal) pero no se vuelve a
-    # escribir en la bitácora.
+    # Critical audit finding: if an earlier run is interrupted (crash,
+    # Task Scheduler killing the process, power loss) AFTER logging a
+    # decision but BEFORE persisting the new index, the next run used to
+    # resume from the old index and reprocess -- and re-log -- those same
+    # rows, duplicating them in the log.
+    # There's no way to make a write atomic across two different files
+    # (log + state) without a real transactional log, so the damage is
+    # bounded to a minimum: state is saved row by row (never once per full
+    # batch), and before logging each row it's checked whether it was
+    # already logged by an earlier interrupted attempt -- if so, it still
+    # goes through `decidir()` again (the restored recursive state is the
+    # one from BEFORE that row, it has to be re-derived to not lose causal
+    # continuity) but it's not written to the log again.
     indices_ya_registrados = {e["indice_fila"] for e in leer_bitacora(ruta_bitacora) if e.get("indice_fila") is not None}
 
     inicio_corrida = datetime.now(timezone.utc).isoformat()
@@ -171,8 +168,8 @@ def correr_ciclo_diario(
 
     resultado_disparador = None
     if indice_procesado > 0:
-        # Referencia = el lote inmediatamente anterior a este (lo más "reciente"
-        # que ya se conocía); actual = lo que se acaba de procesar.
+        # Reference = the batch immediately before this one (the most "recent"
+        # one already known); current = what was just processed.
         inicio_referencia = max(0, indice_procesado - tamano_lote)
         referencia = df.iloc[inicio_referencia:indice_procesado]
         resultado_disparador = evaluar_y_recalibrar_si_hace_falta(
@@ -193,13 +190,13 @@ def correr_ciclo_diario(
                 if not resultado.descartado:
                     n_exitosos += 1
             except (CircuitoAbierto, PresupuestoAgotado):
-                n_fallidos += 1  # se cae al reporte plano -- el escalamiento ya quedó en la bitácora
+                n_fallidos += 1  # falls back to the flat report -- the escalation is already in the log
             except Exception:
-                # Hallazgo de auditoría: solo se capturaban los 2 tipos de arriba --
-                # un error real de red/API (timeout, 5xx) revienta sin capturar y
-                # tumba TODO el job, incluso después de ya haber guardado decisiones
-                # y estado reales. El triage es asesor: ninguna falla suya debe
-                # tumbar el job que ya hizo su trabajo principal.
+                # Audit finding: only the 2 types above used to be caught --
+                # a real network/API error (timeout, 5xx) blows up uncaught and
+                # takes down the ENTIRE job, even after real decisions and state
+                # were already saved. Triage is advisory: no failure of its own
+                # should take down a job that already did its main work.
                 n_fallidos += 1
 
     return ResultadoCorrida(

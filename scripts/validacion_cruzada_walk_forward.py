@@ -1,7 +1,7 @@
-"""Corre la validación cruzada walk-forward multi-fold (`src/validacion_cruzada.py`)
-sobre el dataset real, para saber si el AUC/umbral de Fase 1 (0.972, un
-único split) es representativo del proceso de calibración o el resultado
-de un corte particular con suerte.
+"""Runs multi-fold walk-forward cross-validation (`src/validacion_cruzada.py`)
+over the real dataset, to find out whether Phase 1's AUC/threshold (0.972,
+a single split) is representative of the calibration process or the
+result of one lucky particular cut.
 """
 import json
 from pathlib import Path

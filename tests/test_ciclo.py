@@ -16,22 +16,22 @@ ARTEFACTO = {
 def test_ciclo_decision_solo_se_construye_desde_una_ruta_valida(tmp_path):
     ruta = tmp_path / "artefacto.json"
     publicar(ARTEFACTO, ruta)
-    ciclo = CicloDecision(ruta_artefacto=ruta)  # única forma de construirlo -- fuerza el Puente
+    ciclo = CicloDecision(ruta_artefacto=ruta)  # the only way to build it -- forces the Bridge
     decision = ciclo.decidir({"Amount": 20.0, "Time": 0.0})
-    assert decision.razon == "modelo"  # llegó normal hasta el Veto
+    assert decision.razon == "modelo"  # reached the Veto normally
 
 
 def test_artefacto_ausente_al_construir_lanza_error_sin_fallback_silencioso(tmp_path):
     import pytest
-    from src.puente import leer_vigente  # reexporta FileNotFoundError de puente
+    from src.puente import leer_vigente  # re-exports FileNotFoundError from puente
 
     with pytest.raises(FileNotFoundError):
         CicloDecision(ruta_artefacto=tmp_path / "no_existe.json")
 
 
 def test_veto_siempre_se_aplica_score_nan_no_pasa_como_no_sospechosa(tmp_path, monkeypatch):
-    # El hallazgo crítico #2: sin CicloDecision, nan >= umbral es False en Python -- un score
-    # inválido se vería como "no sospechosa". Con CicloDecision, el Veto SIEMPRE corre.
+    # Critical finding #2: without CicloDecision, nan >= threshold is False in Python -- an
+    # invalid score would look like "not suspicious". With CicloDecision, the Veto ALWAYS runs.
     ruta = tmp_path / "artefacto.json"
     publicar(ARTEFACTO, ruta)
     ciclo = CicloDecision(ruta_artefacto=ruta)
@@ -43,7 +43,7 @@ def test_veto_siempre_se_aplica_score_nan_no_pasa_como_no_sospechosa(tmp_path, m
 
     decision = ciclo.decidir({"Amount": 20.0, "Time": 0.0})
 
-    assert decision.es_sospechosa is True  # el Veto lo atrapa, no queda como "no sospechosa"
+    assert decision.es_sospechosa is True  # the Veto catches it, it doesn't stay "not suspicious"
     assert "rango" in decision.razon
 
 
@@ -53,11 +53,11 @@ def test_excepcion_del_ejecutor_escala_a_revision_manual_en_vez_de_propagarse(tm
     ciclo = CicloDecision(ruta_artefacto=ruta)
 
     def decidir_que_revienta(self, transaccion):
-        raise KeyError("V1")  # ej. un feature faltante en la transacción real
+        raise KeyError("V1")  # e.g. a missing feature in the real transaction
 
     monkeypatch.setattr("src.ejecutor.Ejecutor.decidir", decidir_que_revienta)
 
-    decision = ciclo.decidir({"Amount": 20.0, "Time": 0.0})  # no debe propagar el KeyError
+    decision = ciclo.decidir({"Amount": 20.0, "Time": 0.0})  # must not propagate the KeyError
 
     assert decision.es_sospechosa is True
     assert "escalar a revisión manual" in decision.razon
@@ -80,13 +80,13 @@ def test_recargar_artefacto_conserva_el_estado_recursivo(tmp_path):
     publicar(ARTEFACTO, ruta)
     ciclo = CicloDecision(ruta_artefacto=ruta)
 
-    ciclo.decidir({"Amount": 100.0, "Time": 0.0})  # alimenta el estado (EWMA, ventana)
+    ciclo.decidir({"Amount": 100.0, "Time": 0.0})  # feeds the state (EWMA, window)
     estado_antes = ciclo._ejecutor.estado
 
     publicar({**ARTEFACTO, "umbral_decision": 0.8}, ruta)
     ciclo.recargar_artefacto()
 
-    assert ciclo._ejecutor.estado is estado_antes  # el mismo objeto de estado, no uno nuevo vacío
+    assert ciclo._ejecutor.estado is estado_antes  # the same state object, not a new empty one
 
 
 def test_recargar_artefacto_fallido_no_reemplaza_el_ejecutor_vigente(tmp_path):
@@ -94,11 +94,11 @@ def test_recargar_artefacto_fallido_no_reemplaza_el_ejecutor_vigente(tmp_path):
     publicar(ARTEFACTO, ruta)
     ciclo = CicloDecision(ruta_artefacto=ruta)
 
-    ruta.write_text("esto no es json valido {{{", encoding="utf-8")  # corrompe el archivo
+    ruta.write_text("esto no es json valido {{{", encoding="utf-8")  # corrupts the file
 
     exito = ciclo.recargar_artefacto()
 
     assert exito is False
-    # sigue operando con el artefacto original -- degradación con gracia, no una caída
+    # keeps operating on the original artifact -- graceful degradation, not a crash
     decision = ciclo.decidir({"Amount": 20.0, "Time": 1.0})
     assert decision.razon == "modelo"

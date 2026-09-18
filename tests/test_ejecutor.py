@@ -21,7 +21,7 @@ ARTEFACTO_VALIDO = {
 
 
 def test_validar_artefacto_valido_no_lanza_error():
-    validar_artefacto(ARTEFACTO_VALIDO)  # no debe lanzar
+    validar_artefacto(ARTEFACTO_VALIDO)  # must not raise
 
 
 def test_validar_artefacto_campo_faltante():
@@ -48,25 +48,25 @@ def test_ejecutor_rechaza_artefacto_invalido_al_construirse():
 
 
 def test_decidir_score_caso_conocido():
-    # z = -1.0 + 0.1*20 = 1.0 -> sigmoide(1.0) = 0.7310585786300049
+    # z = -1.0 + 0.1*20 = 1.0 -> sigmoid(1.0) = 0.7310585786300049
     ejecutor = Ejecutor(artefacto=ARTEFACTO_VALIDO)
     resultado = ejecutor.decidir({"Amount": 20.0, "Time": 0.0})
     assert resultado["score"] == pytest.approx(0.7310585786300049)
-    assert resultado["es_sospechosa"] is True  # 0.731 >= umbral 0.5
+    assert resultado["es_sospechosa"] is True  # 0.731 >= threshold 0.5
 
 
 def test_decidir_bajo_el_umbral_no_es_sospechosa():
-    # z = -1.0 + 0.1*5 = -0.5 -> sigmoide(-0.5) ~ 0.377 < 0.5
+    # z = -1.0 + 0.1*5 = -0.5 -> sigmoid(-0.5) ~ 0.377 < 0.5
     ejecutor = Ejecutor(artefacto=ARTEFACTO_VALIDO)
     resultado = ejecutor.decidir({"Amount": 5.0, "Time": 0.0})
     assert resultado["es_sospechosa"] is False
 
 
 def test_ejecutor_coincide_exactamente_con_calculo_batch_end_to_end():
-    # La prueba definitiva: calibrar en modo batch, y luego procesar la MISMA secuencia
-    # de transacciones una por una a través del Ejecutor -- los scores deben coincidir
-    # exactamente con los que produce el propio proceso de calibración sobre el
-    # tramo de validación (mismo pipeline, sin fuga, sin skew).
+    # The definitive test: calibrate in batch mode, then process the SAME sequence
+    # of transactions one by one through the Executor -- the scores must match
+    # exactly the ones the calibration process itself produces over the
+    # validation split (same pipeline, no leakage, no skew).
     rng = np.random.default_rng(7)
     n = 1000
     es_fraude = rng.random(n) < 0.05
@@ -85,9 +85,9 @@ def test_ejecutor_coincide_exactamente_con_calculo_batch_end_to_end():
     z_batch = artefacto["intercepto"] + (val[FEATURES].to_numpy() @ np.array(artefacto["coeficientes"]))
     scores_batch = 1 / (1 + np.exp(-z_batch))
 
-    # El Ejecutor debe procesar TAMBIÉN `train` primero -- las features recursivas de
-    # `val` en modo batch cargan con el historial continuo desde el principio del
-    # dataset (train+val), no desde un estado vacío que arranca justo en el corte.
+    # The Executor must ALSO process `train` first -- `val`'s recursive features in
+    # batch mode load with the continuous history from the start of the
+    # dataset (train+val), not from an empty state that starts right at the cut.
     ejecutor = Ejecutor(artefacto=artefacto)
     columnas = ["Amount", "Time"] + [f"V{i}" for i in range(1, 29)]
     for _, fila in train.iterrows():
@@ -114,6 +114,6 @@ def test_benchmark_latencia_real_microsegundos():
     microsegundos_por_decision = (duracion_total / n) * 1_000_000
     print(f"\nLatencia real: {microsegundos_por_decision:.2f} microsegundos/decisión ({n} decisiones)")
 
-    # Cota generosa (no una promesa de microsegundos de un vendor) -- el número real
-    # impreso arriba es la medición que importa; esto solo evita una regresión grosera.
+    # Generous bound (not a vendor's microsecond promise) -- the real number
+    # printed above is the measurement that matters; this only guards against a gross regression.
     assert microsegundos_por_decision < 500.0

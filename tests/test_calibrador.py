@@ -9,10 +9,10 @@ from src.features_recursivas import calcular_features_recursivas_batch
 
 
 def _dataset_sintetico(n: int = 2000, seed: int = 0) -> pd.DataFrame:
-    """Dataset sintético con señal real y separable: el fraude tiene Amount
-    y V1 sistemáticamente distintos, suficiente para que la regresión
-    logística encuentre una frontera de decisión no trivial. Incluye las
-    features recursivas -- mismo pipeline que `cargar_dataset` en producción."""
+    """Synthetic dataset with a real, separable signal: fraud has systematically
+    different Amount and V1, enough for logistic regression to find a
+    non-trivial decision boundary. Includes the recursive features -- same
+    pipeline as `cargar_dataset` in production."""
     rng = np.random.default_rng(seed)
     es_fraude = rng.random(n) < 0.05
 
@@ -35,7 +35,7 @@ def test_cargar_dataset_limpia_comillas_de_class(tmp_path):
 
     df = cargar_dataset(ruta)
 
-    assert df["Class"].tolist() == [1, 0]  # se reordenó por Time (1.0 antes que 2.0)
+    assert df["Class"].tolist() == [1, 0]  # reordered by Time (1.0 before 2.0)
     assert df["Class"].dtype == int
 
 
@@ -66,7 +66,7 @@ def test_calibrar_produce_artefacto_con_schema_de_adr_001():
 
 
 def test_calibrar_encuentra_señal_real_auc_alto():
-    # Con separación real entre clases, el AUC en validación debe ser claramente > 0.5 (azar).
+    # With real separation between classes, validation AUC should be clearly > 0.5 (chance).
     df = _dataset_sintetico(n=3000)
     train, val, _ = split_temporal(df)
     artefacto = calibrar(train, val)
@@ -74,8 +74,8 @@ def test_calibrar_encuentra_señal_real_auc_alto():
 
 
 def test_coeficientes_desescalados_coinciden_exactamente_con_modelo_escalado():
-    # Verifica la identidad algebraica score = w·((x-mu)/sigma)+b == (w/sigma)·x + (b - w·mu/sigma)
-    # -- no una aproximación, debe coincidir hasta precisión de punto flotante.
+    # Verifies the algebraic identity score = w·((x-mu)/sigma)+b == (w/sigma)·x + (b - w·mu/sigma)
+    # -- not an approximation, must match to floating-point precision.
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
 
@@ -128,16 +128,16 @@ def test_cargar_dataset_columnas_faltantes_lanza_error(tmp_path):
 
 
 def test_cargar_dataset_orden_estable_en_empates_de_time(tmp_path):
-    # Dos filas con el mismo Time -- el orden relativo original del CSV debe preservarse.
+    # Two rows with the same Time -- the CSV's original relative order must be preserved.
     ruta = tmp_path / "empate.csv"
     columnas = ["Time"] + [f"V{i}" for i in range(1, 29)] + ["Amount", "Class"]
-    fila_a = [5.0] + [0.0] * 28 + [111.0, "'0'"]  # Amount=111 marca "la fila A"
-    fila_b = [5.0] + [0.0] * 28 + [222.0, "'0'"]  # Amount=222 marca "la fila B", viene después en el CSV
+    fila_a = [5.0] + [0.0] * 28 + [111.0, "'0'"]  # Amount=111 marks "row A"
+    fila_b = [5.0] + [0.0] * 28 + [222.0, "'0'"]  # Amount=222 marks "row B", comes after in the CSV
     pd.DataFrame([fila_a, fila_b], columns=columnas).to_csv(ruta, index=False)
 
     df = cargar_dataset(ruta)
 
-    assert df["Amount"].tolist() == [111.0, 222.0]  # A sigue antes que B, no se reordenaron
+    assert df["Amount"].tolist() == [111.0, 222.0]  # A still comes before B, not reordered
 
 
 def test_calibrar_sin_positivos_en_train_lanza_error():
@@ -151,26 +151,27 @@ def test_calibrar_sin_positivos_en_train_lanza_error():
 
 
 def test_mejor_umbral_por_f1_no_queda_topado_cuando_el_optimo_esta_sobre_0_99():
-    # Hallazgo real (ver docstring de _mejor_umbral_por_f1): con separación fuerte,
-    # todos los scores -- de ambas clases -- pueden caer por encima de 0.99. La
-    # versión vieja (grilla fija hasta 0.99) nunca podía separar este caso: todo
-    # candidato <= 0.99 predice TODO como positivo (F1 forzado a 0.5714, ver cálculo
-    # a mano abajo). El umbral verdaderamente óptimo (0.998) sí separa perfecto.
+    # Real finding (see _mejor_umbral_por_f1's docstring): with strong separation,
+    # all the scores -- from both classes -- can fall above 0.99. The old
+    # version (fixed grid up to 0.99) could never separate this case: every
+    # candidate <= 0.99 predicts EVERYTHING as positive (F1 forced to 0.5714, see
+    # the hand computation below). The truly optimal threshold (0.998) does
+    # separate it perfectly.
     y_true = np.array([0, 0, 0, 1, 1])
     scores = np.array([0.991, 0.993, 0.995, 0.998, 0.9995])
 
     umbral = _mejor_umbral_por_f1(y_true, scores)
 
     y_pred = (scores >= umbral).astype(int)
-    assert list(y_pred) == [0, 0, 0, 1, 1]  # separación perfecta -- F1 = 1.0
-    assert umbral > 0.99  # el hallazgo: el óptimo real está fuera del rango que exploraba la grilla vieja
+    assert list(y_pred) == [0, 0, 0, 1, 1]  # perfect separation -- F1 = 1.0
+    assert umbral > 0.99  # the finding: the real optimum is outside the range the old grid explored
 
 
 def test_calibrar_sin_positivos_en_val_lanza_error():
     df = _dataset_sintetico(n=2000, seed=1)
     train, val, _ = split_temporal(df)
     val = val.copy()
-    val["Class"] = 0  # fuerza el caso "sin fraude en validación"
+    val["Class"] = 0  # forces the "no fraud in validation" case
 
     with pytest.raises(DatasetInvalido, match="val"):
         calibrar(train, val)

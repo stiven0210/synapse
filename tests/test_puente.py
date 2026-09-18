@@ -30,7 +30,7 @@ def test_publicar_rechaza_artefacto_invalido_sin_escribir_nada(tmp_path):
     with pytest.raises(ArtefactoInvalido):
         publicar(invalido, ruta)
 
-    assert not ruta.exists()  # nunca se publica algo inválido, ni parcialmente
+    assert not ruta.exists()  # an invalid artifact is never published, not even partially
 
 
 def test_publicar_no_deja_archivo_temporal_residual(tmp_path):
@@ -57,6 +57,6 @@ def test_leer_vigente_sin_archivo_lanza_error(tmp_path):
 
 def test_leer_vigente_archivo_corrupto_lanza_artefacto_invalido(tmp_path):
     ruta = tmp_path / "artefacto.json"
-    ruta.write_text(json.dumps({"version": 1}), encoding="utf-8")  # le faltan casi todos los campos
+    ruta.write_text(json.dumps({"version": 1}), encoding="utf-8")  # missing almost all the fields
     with pytest.raises(ArtefactoInvalido):
         leer_vigente(ruta)

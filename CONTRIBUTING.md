@@ -71,10 +71,14 @@ in a PR.
   ```bash
   pytest tests/ -q
   ```
-- Match the existing code's language convention: identifiers and
-  docstrings in `src/` and `tests/` are Spanish (this is a Spanish-first
-  codebase); documentation in `docs/`, the README, and ADRs is English.
-  Don't mix the two within a single file.
+- Match the existing code's language convention: identifiers (function,
+  class, and variable names) and functional string literals (exception
+  messages, enum-like values, JSON/dict field names) in `src/` and
+  `tests/` are Spanish — this is a Spanish-first codebase, and some of
+  those strings are matched exactly by other code (e.g.
+  `bitacora_decisiones.clasificar_razon()`), so don't translate them.
+  Comments and docstrings, on the other hand, are English throughout,
+  same as `docs/`, the README, and the ADRs.
 - Small, focused PRs over large ones. If a change touches the Policy
   Artifact contract or adds a Veto invariant, link the ADR that motivates
   it.

@@ -1,8 +1,8 @@
-"""Contrato del artefacto de política (`docs/adr/0001-policy-artifact.md`)
-— vive en un módulo neutral, no en `ejecutor.py` ni en `puente.py`. Corrige
-un hallazgo de la auditoría: `puente.py` importaba la validación desde
-`ejecutor.py`, invirtiendo la dirección natural de dependencia (el
-contrato es compartido, no debería depender del consumidor rápido).
+"""Policy artifact contract (`docs/adr/0001-policy-artifact.md`)
+— lives in a neutral module, not in `ejecutor.py` or `puente.py`. Fixes
+an audit finding: `puente.py` used to import the validation from
+`ejecutor.py`, inverting the natural dependency direction (the contract
+is shared, it shouldn't depend on the fast consumer).
 """
 import numpy as np
 
@@ -13,9 +13,9 @@ CAMPOS_REQUERIDOS_ADR_001 = {
 
 
 class ArtefactoInvalido(Exception):
-    """El artefacto no cumple `ADR_001` — nunca se opera con un artefacto
-    que no valida (invariante 1 de `ADR_002`: sin artefacto válido, no hay
-    decisión automática)."""
+    """The artifact doesn't satisfy `ADR_001` — never operate on an
+    artifact that fails validation (invariant 1 of `ADR_002`: no valid
+    artifact, no automated decision)."""
 
 
 def _es_numero(valor) -> bool:
@@ -23,11 +23,11 @@ def _es_numero(valor) -> bool:
 
 
 def validar_artefacto(artefacto: dict) -> None:
-    """Valida forma (ADR_001) Y contenido — un artefacto "correcto en
-    longitud" pero con coeficientes no numéricos o nombres de feature
-    vacíos pasaba esta validación antes y solo explotaba con un error crudo
-    dentro del camino caliente (`Ejecutor.decidir()`), en la primera
-    transacción real en vez de al publicarlo."""
+    """Validates shape (ADR_001) AND content — an artifact "correct in
+    length" but with non-numeric coefficients or empty feature names used
+    to pass this validation and only blow up with a raw error inside the
+    hot path (`Ejecutor.decidir()`), on the first real transaction instead
+    of at publish time."""
     faltantes = CAMPOS_REQUERIDOS_ADR_001 - artefacto.keys()
     if faltantes:
         raise ArtefactoInvalido(f"faltan campos requeridos por ADR_001: {faltantes}")
@@ -54,8 +54,8 @@ def validar_artefacto(artefacto: dict) -> None:
 
 
 def _sigmoide_vectorizada(z: np.ndarray) -> np.ndarray:
-    """Misma forma numéricamente estable que `Ejecutor._sigmoide`
-    (evita overflow de `exp` para z muy negativo), vectorizada."""
+    """Same numerically stable shape as `Ejecutor._sigmoide`
+    (avoids `exp` overflow for very negative z), vectorized."""
     resultado = np.empty_like(z, dtype=float)
     positivos = z >= 0
     resultado[positivos] = 1.0 / (1.0 + np.exp(-z[positivos]))
@@ -65,15 +65,15 @@ def _sigmoide_vectorizada(z: np.ndarray) -> np.ndarray:
 
 
 def calcular_scores(artefacto: dict, df) -> np.ndarray:
-    """Aplica el artefacto a un DataFrame completo, vectorizado -- versión
-    batch de la misma fórmula que `Ejecutor.decidir()` aplica
-    incrementalmente fila por fila (verificado idéntico en
-    `tests/test_artefacto.py`). Solo para diagnóstico/análisis offline
-    (ej. `deriva.evaluar_deriva_score`, `scripts/comparacion_umbral_por_costo.py`)
-    -- el camino caliente real sigue siendo exclusivamente
-    `Ejecutor`/`CicloDecision`, esto nunca se usa ahí. Requiere que `df` ya
-    tenga las features del artefacto calculadas (incluidas las recursivas,
-    vía `features_recursivas.calcular_features_recursivas_batch`)."""
+    """Applies the artifact to a full DataFrame, vectorized -- the batch
+    version of the same formula `Ejecutor.decidir()` applies incrementally
+    row by row (verified identical in `tests/test_artefacto.py`). Only for
+    offline diagnostics/analysis (e.g. `deriva.evaluar_deriva_score`,
+    `scripts/comparacion_umbral_por_costo.py`) -- the real hot path
+    remains exclusively `Ejecutor`/`CicloDecision`, this is never used
+    there. Requires `df` to already have the artifact's features computed
+    (including the recursive ones, via
+    `features_recursivas.calcular_features_recursivas_batch`)."""
     X = df[artefacto["features"]].to_numpy(dtype=float)
     z = artefacto["intercepto"] + X @ np.asarray(artefacto["coeficientes"], dtype=float)
     return _sigmoide_vectorizada(z)

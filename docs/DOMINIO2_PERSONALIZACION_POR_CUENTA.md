@@ -1,280 +1,277 @@
-# Dominio 2 — Personalización por cuenta (investigación en curso)
+# Domain 2 — Per-account personalization (research in progress)
 
-**Estado:** Exploración, validación e integración de producción completas con
-resultados reales (ver sección 13). Sigue en fase de pruebas -- nada de esto
-se ha desplegado ni conectado a tráfico real.
+**Status:** Exploration, validation, and production integration complete with
+real results (see section 13). Still in testing phase -- none of this has
+been deployed or connected to live traffic.
 
-**Por qué existe esto:** Fase 0 (Dominio 1) documentó una limitación real: el
-dataset de Credit Card Fraud no tiene identificador de cuenta, así que el
-Ejecutor solo puede mantener estadísticos **globales**, nunca personalización
-por cuenta. Esta investigación resuelve esa limitación con un segundo dataset
-real, y de paso responde si vale la pena ir más allá del modelo lineal.
+**Why this exists:** Phase 0 (Domain 1) documented a real limitation: the
+Credit Card Fraud dataset has no account identifier, so the Executor can
+only maintain **global** statistics, never per-account personalization. This
+research resolves that limitation with a second real dataset, and along the
+way answers whether it's worth going beyond the linear model.
 
-## 1. Dataset: Sparkov (sintético, con identificador de cuenta)
+## 1. Dataset: Sparkov (synthetic, with account identifier)
 
-Generado localmente con [`Sparkov_Data_Generation`](https://github.com/namebrandon/Sparkov_Data_Generation)
-(sin Kaggle, sin cuenta, sin verificación — alternativa real cuando IEEE-CIS
-quedó bloqueado por soporte de Kaggle). Parámetros: 100 clientes,
-2013-01-01 a 2026-09-12, semilla 42.
+Generated locally with [`Sparkov_Data_Generation`](https://github.com/namebrandon/Sparkov_Data_Generation)
+(no Kaggle, no account, no verification — a real alternative once IEEE-CIS
+got blocked by Kaggle support). Parameters: 100 customers,
+2013-01-01 to 2026-09-12, seed 42.
 
-Combinado y reducido a las columnas útiles (61 archivos crudos → 1 CSV):
-`data/raw/sparkov_2013_2026.csv` (119MB, gitignored igual que `creditcard.csv`).
+Combined and reduced to the useful columns (61 raw files → 1 CSV):
+`data/raw/sparkov_2013_2026.csv` (119MB, gitignored just like `creditcard.csv`).
 
-- **1,170,945 transacciones, 99 cuentas únicas** (`cc_num`), 907 fraudes (0.077%).
-- Columnas: `cc_num`, `amt`, `unix_time`/`trans_date`/`trans_time`, `category`,
-  `is_fraud`, `lat`/`long` (cliente), `merch_lat`/`merch_long` (comercio).
-- **Esquema totalmente distinto al Dominio 1** — no tiene V1-V28 (PCA), tiene
-  features crudas/categóricas. `calibrador.py` (Dominio 1) no aplica tal cual;
-  esto es un segundo dominio real, no un cambio de archivo.
-- **Distancia geográfica cliente-comercio: descartada.** Probada explícitamente
-  (76.5 km promedio en fraude vs. 75.1 km en legítimas) — sin señal en este
-  generador. No se volvió a intentar.
-- **12 de 99 cuentas son "perfiles de fraude" puros** (100% de sus 7-12
-  transacciones son fraude — identidades sintéticas dedicadas, no clientes
-  víctimas). Representan 119 de 907 fraudes. Toda validación de aquí en
-  adelante se corrió **con y sin** estas cuentas para no confundir "detectar
-  fraude" con "reconocer una cuenta ya conocida como mala".
+- **1,170,945 transactions, 99 unique accounts** (`cc_num`), 907 frauds (0.077%).
+- Columns: `cc_num`, `amt`, `unix_time`/`trans_date`/`trans_time`, `category`,
+  `is_fraud`, `lat`/`long` (customer), `merch_lat`/`merch_long` (merchant).
+- **Schema entirely different from Domain 1** — no V1-V28 (PCA), it has
+  raw/categorical features instead. Domain 1's `calibrador.py` doesn't apply
+  as-is; this is a second real domain, not a file swap.
+- **Customer-merchant geographic distance: dropped.** Explicitly tested
+  (76.5 km average for fraud vs. 75.1 km for legitimate) — no signal in this
+  generator. Not attempted again.
+- **12 of 99 accounts are pure "fraud profiles"** (100% of their 7-12
+  transactions are fraud — dedicated synthetic identities, not victim
+  customers). They account for 119 of 907 frauds. Every validation from here
+  on was run **with and without** these accounts, to avoid confusing
+  "detecting fraud" with "recognizing an account already known to be bad."
 
-## 2. Hallazgo real: trampa de no-estacionariedad en `category`
+## 2. Real finding: a non-stationarity trap in `category`
 
-Con un one-hot ingenuo de `category` + split temporal 60/20/20, el AUC
-combinado caía **por debajo de 0.5** (peor que azar). Causa encontrada y
-verificada, no solo sospechada:
+With a naive one-hot of `category` + a 60/20/20 temporal split, the combined
+AUC fell **below 0.5** (worse than chance). The cause was found and verified,
+not just suspected:
 
-| Período | Transacciones `personal_care` | Fraudes |
+| Period | `personal_care` transactions | Frauds |
 |---|---|---|
-| 2013-2023 (11 años) | ~24 en total | **todas** |
+| 2013-2023 (11 years) | ~24 total | **all of them** |
 | 2025-2026 | 82,456 | 4 |
 
-De 2013 a 2023 la categoría casi no tiene actividad legítima simulada; las
-pocas apariciones tempranas son inyecciones de fraude (el generador puede
-etiquetar fraude con cualquier categoría, sin importar si esa categoría tiene
-volumen legítimo en ese momento). El modelo aprende "personal_care = fraude"
-de esas ~24 filas y esa regla falla catastróficamente cuando la categoría se
-vuelve normal en 2025-2026.
+From 2013 to 2023 the category has almost no simulated legitimate activity;
+the few early occurrences are fraud injections (the generator can label
+fraud with any category, regardless of whether that category has legitimate
+volume at that point in time). The model learns "personal_care = fraud" from
+those ~24 rows, and that rule fails catastrophically once the category
+becomes normal in 2025-2026.
 
-**Lección general (no específica de esta categoría):** con solo 99 cuentas en
-13 años, cualquier categoría cuya actividad legítima no esté distribuida de
-forma estable en el tiempo es una trampa para one-hot + split temporal —
-mismo principio de fondo que "universo point-in-time" en cualquier sistema que
-mira una distribución histórica no estacionaria como si fuera constante.
+**General lesson (not specific to this category):** with only 99 accounts
+over 13 years, any category whose legitimate activity isn't stably
+distributed over time is a trap for one-hot + temporal split — the same
+underlying principle as a "point-in-time universe" in any system that treats
+a non-stationary historical distribution as if it were constant.
 
-**Decisión:** `category` cruda queda fuera del modelo. Pendiente si se retoma:
-una codificación point-in-time (tasa de fraude por categoría con ventana
-móvil reciente, no un one-hot fijo ajustado una sola vez).
+**Decision:** raw `category` stays out of the model. Pending if revisited:
+a point-in-time encoding (fraud rate per category with a recent rolling
+window, not a one-hot fixed once and never updated).
 
-## 3. Feature nueva: huella de comportamiento por cuenta
+## 3. New feature: per-account behavior fingerprint
 
-`huella_categoria_cuenta`: de las últimas K=20 transacciones **de esa cuenta**
-(causal, ventana deslizante por conteo — mismo patrón que `conteo_ventana_global`
-pero por cuenta y por categoría en vez de por tiempo), qué fracción fueron en
-la misma categoría que la transacción actual. Cuentas con <5 transacciones
-previas usan la frecuencia poblacional como respaldo (0.04% de las filas) en
-vez de un valor inventado.
+`huella_categoria_cuenta`: out of the last K=20 transactions **for that
+account** (causal, count-based sliding window — same pattern as
+`conteo_ventana_global` but per account and per category instead of by
+time), what fraction were in the same category as the current transaction.
+Accounts with <5 prior transactions fall back to the population frequency
+(0.04% of rows) instead of a made-up value.
 
-**Validado, no solo diseñado:**
-- Estable en el tiempo (promedio anual 0.98-0.99 en los 14 años) — no
-  reproduce la trampa de la sección 2.
-- Coeficiente negativo en regresión logística: categoría inusual *para esa
-  cuenta específica* → más probable fraude (la intuición correcta).
-- Con regresión logística: AUC-ROC pasó de 0.976 a 0.998 al agregarla.
+**Validated, not just designed:**
+- Stable over time (annual average 0.98-0.99 across the 14 years) — doesn't
+  reproduce the trap from section 2.
+- Negative coefficient in logistic regression: an unusual category *for that
+  specific account* → more likely fraud (the correct intuition).
+- With logistic regression: AUC-ROC went from 0.976 to 0.998 when added.
 
-## 4. AUC-ROC vs. AUC-PR — por qué el primer número engañaba
+## 4. AUC-ROC vs. AUC-PR — why the first number was misleading
 
-Benchmarks publicados reales: AUC-ROC 0.86-0.92 típico, **AUC-PR 0.51-0.66**
-típico (la industria usa AUC-PR, no AUC-ROC, porque con fraude tan
-desbalanceado el AUC-ROC se ve inflado fácilmente).
+Real published benchmarks: AUC-ROC 0.86-0.92 typical, **AUC-PR 0.51-0.66**
+typical (the industry uses AUC-PR, not AUC-ROC, because with fraud this
+imbalanced, AUC-ROC is easily inflated).
 
-Con regresión logística (todas las features, incluida la huella):
+With logistic regression (all features, including the fingerprint):
 
 | | VAL | TEST |
 |---|---|---|
 | AUC-ROC | 0.998 | 0.998 |
 | **AUC-PR** | **0.161** | **0.263** |
 
-**Por debajo** del benchmark publicado (0.16-0.26 vs. 0.51-0.66), pese al
-AUC-ROC casi perfecto. El modelo lineal se estaba quedando corto.
+**Below** the published benchmark (0.16-0.26 vs. 0.51-0.66), despite the
+near-perfect AUC-ROC. The linear model was falling short.
 
-## 5. Gradient Boosting — el techo era el modelo, no los datos
+## 5. Gradient Boosting — the ceiling was the model, not the data
 
-Diagnóstico: mismas features, mismo split, `HistGradientBoostingClassifier`
-(sklearn, sin dependencia nueva) en vez de regresión logística.
+Diagnosis: same features, same split, `HistGradientBoostingClassifier`
+(sklearn, no new dependency) instead of logistic regression.
 
-| | AUC-PR (con perfiles de fraude) | AUC-PR (sin perfiles de fraude) |
+| | AUC-PR (with fraud profiles) | AUC-PR (without fraud profiles) |
 |---|---|---|
-| Regresión logística | 0.161 / 0.263 (val/test) | 0.144 / 0.198 |
+| Logistic regression | 0.161 / 0.263 (val/test) | 0.144 / 0.198 |
 | **Gradient Boosting** | 0.953 / 0.932 | 0.945 / 0.924 |
 
-Prácticamente sin cambio al quitar las 12 cuentas triviales — confirma que es
-señal real de comportamiento anómalo en cuentas normales, no memorización de
-identidades de cuenta conocidas.
+Practically no change when removing the 12 trivial accounts — confirms this
+is real signal about anomalous behavior in normal accounts, not memorization
+of known account identities.
 
-**En números de negocio (mejor umbral por F1, sin perfiles de fraude):**
+**In business terms (best threshold by F1, without fraud profiles):**
 
 | | VAL | TEST |
 |---|---|---|
-| Fraudes reales | 154 | 200 |
-| Atrapados | 139 (90.3%) | 180 (90.0%) |
-| Falsas alarmas | 24 | 29 |
-| Precisión | 85.3% | 86.1% |
+| Real frauds | 154 | 200 |
+| Caught | 139 (90.3%) | 180 (90.0%) |
+| False alarms | 24 | 29 |
+| Precision | 85.3% | 86.1% |
 
-Muy por encima del benchmark publicado de AUC-PR (0.51-0.66) — con la
-salvedad honesta de que sigue siendo un dataset **sintético**: ya se sabe que
-el fraude simulado de Sparkov tiene una separación más limpia que el fraude
-real (monto promedio 8x mayor en fraude). Esto valida la ingeniería de
-features y que el modelo lineal era el cuello de botella, no una promesa de
-desempeño idéntico contra fraude real adversarial.
+Well above the published AUC-PR benchmark (0.51-0.66) — with the honest
+caveat that it's still a **synthetic** dataset: it's already known that
+Sparkov's simulated fraud has a cleaner separation than real fraud (average
+amount 8x higher in fraud). This validates the feature engineering and that
+the linear model was the bottleneck, not a promise of identical performance
+against real adversarial fraud.
 
-## 6. Exportación a aritmética pura — validado exacto, no aproximado
+## 6. Export to pure arithmetic — validated exact, not approximate
 
-Pregunta abierta: Gradient Boosting requiere una librería de ML en tiempo de
-decisión, lo cual choca con el principio central del Ejecutor (aritmética
-pura, sin librería pesada en el camino caliente).
+Open question: Gradient Boosting requires an ML library at decision time,
+which conflicts with the Executor's core principle (pure arithmetic, no
+heavy library on the hot path).
 
-**Resuelto:** se extrajo la estructura interna de los árboles de
-`HistGradientBoostingClassifier` (`_predictors[i][0].nodes`, un array
-estructurado con `feature_idx`, `num_threshold`, `left`, `right`, `is_leaf`,
-`value`, `missing_go_to_left`) y se escribió un evaluador en Python puro
-(comparaciones + sumas + un sigmoide, sin sklearn). Comparado contra
-`predict_proba()` del modelo original: **diferencia máxima 2.8×10⁻¹⁷** —
-idéntico, no una aproximación con pérdida.
+**Resolved:** the internal tree structure of `HistGradientBoostingClassifier`
+was extracted (`_predictors[i][0].nodes`, a structured array with
+`feature_idx`, `num_threshold`, `left`, `right`, `is_leaf`, `value`,
+`missing_go_to_left`) and a pure-Python evaluator was written (comparisons +
+sums + a sigmoid, no sklearn). Compared against the original model's
+`predict_proba()`: **maximum difference 2.8×10⁻¹⁷** — identical, not a lossy
+approximation.
 
-**Implica:** Gradient Boosting sí es compatible con el Ejecutor, a costo de
-ingeniería (no de arquitectura). Pendiente de construir como producción:
+**Implication:** Gradient Boosting is indeed compatible with the Executor,
+at an engineering cost (not an architectural one). Still pending to build
+for production:
 
-1. Nuevo formato de artefacto (lista de árboles serializada en JSON, en vez
-   de `coeficientes`/`intercepto`).
-2. Nuevo Ejecutor que recorra árboles en vez de producto punto — mismo
-   contrato `decidir(transaccion) -> dict`.
-3. Probablemente un `CicloDecision` paralelo (no tocar el ya auditado dos
-   veces para una necesidad que solo tiene este dominio).
-4. Tests verificando exactitud byte a byte contra sklearn, igual que la
-   validación manual de esta sección.
+1. New artifact format (a list of trees serialized as JSON, instead of
+   `coeficientes`/`intercepto`).
+2. A new Executor that walks trees instead of a dot product — same
+   `decidir(transaccion) -> dict` contract.
+3. Probably a parallel `CicloDecision` (not touching the one already audited
+   twice, for a need specific to this domain).
+4. Tests verifying byte-for-byte accuracy against sklearn, same as this
+   section's manual validation.
 
-### Latencia del evaluador (2026-09-13) — por debajo de Dominio 1, muy por encima de la industria
+### Evaluator latency (2026-09-13) — below Domain 1, far above industry needs
 
-Medido con la misma metodología que `scripts/validacion_end_to_end.py`
-(decisión por decisión, no por lotes), sobre los 175 árboles del modelo final
+Measured with the same methodology as `scripts/validacion_end_to_end.py`
+(decision by decision, not batched), over the 175 trees of the final model
 (`max_depth=3, learning_rate=0.05, max_iter=200`):
 
-| Evaluador | Latencia/decisión |
+| Evaluator | Latency/decision |
 |---|---|
-| Ejecutor Dominio 1 (producto punto, referencia) | 8.33 µs |
-| Árboles — nodos como diccionarios de Python | 157.3 µs |
-| Árboles — **código generado** (umbrales horneados como literales, compilado una sola vez con `compile()`/`exec()`, cero diccionarios en el camino caliente) | **39.6 µs** |
+| Domain 1 Executor (dot product, reference) | 8.33 µs |
+| Trees — nodes as Python dictionaries | 157.3 µs |
+| Trees — **generated code** (thresholds baked in as literals, compiled once with `compile()`/`exec()`, zero dictionaries on the hot path) | **39.6 µs** |
 
-La versión con diccionarios es 19x más lenta que Dominio 1; la de código
-generado la deja en ~4.75x — la mejora (4x) viene de eliminar el *overhead*
-de acceso a diccionarios en tiempo de decisión, no de cambiar el algoritmo.
-Exactitud verificada igual en ambas: diferencia máxima 1.39×10⁻¹⁷ vs.
-`predict_proba()` de sklearn.
+The dictionary version is 19x slower than Domain 1; the generated-code
+version brings it to ~4.75x — the improvement (4x) comes from eliminating
+dictionary-access overhead at decision time, not from changing the
+algorithm. Accuracy verified equally on both: maximum difference 1.39×10⁻¹⁷
+vs. sklearn's `predict_proba()`.
 
-**Conclusión honesta:** por debajo del estándar interno (Dominio 1), pero
-39.6 µs = 0.04 ms sigue siendo ~2,500x más rápido que una ventana de
-autorización típica de redes de tarjetas (decenas de milisegundos) — no es
-un bloqueante real para producción, solo una diferencia de elegancia/paridad
-interna. Reportes en `data/reporte_latencia_arboles_dominio2.json` (versión
-diccionarios) y `data/reporte_latencia_arboles_codegen.json` (versión
-código generado). El generador de código sigue siendo exploratorio (script
-de una sola corrida, no un módulo de `src/` todavía) — si se retoma la
-integración de producción, el punto 2 de la lista de arriba debería usar
-este enfoque de código generado, no el de diccionarios.
+**Honest conclusion:** below the internal standard (Domain 1), but
+39.6 µs = 0.04 ms is still ~2,500x faster than a typical card-network
+authorization window (tens of milliseconds) — not a real blocker for
+production, just a difference in elegance/internal parity. Reports in
+`data/reporte_latencia_arboles_dominio2.json` (dictionary version) and
+`data/reporte_latencia_arboles_codegen.json` (generated-code version). The
+code generator is still exploratory (a one-off script, not yet a `src/`
+module) — if production integration is resumed, item 2 of the list above
+should use this generated-code approach, not the dictionary one.
 
-### Segunda ronda de optimización (2026-09-13) — sin chequeo de NaN, y tabla de búsqueda (fallida)
+### Second optimization round (2026-09-13) — no NaN check, and a lookup table (failed)
 
-**Quitar el chequeo de NaN de cada nodo:** las 5 features nunca son NaN en
-este pipeline (verificado con `assert` antes de confiar en el resultado, no
-solo supuesto) — el chequeo era código muerto. Resultado: **39.6 µs → 30.5 µs**
-(1.3x más), acumulado 5.16x más rápido que la versión de diccionarios,
-exactitud igual (1.39×10⁻¹⁷). Reporte en
+**Removing the NaN check from every node:** the 5 features are never NaN in
+this pipeline (verified with an `assert` before trusting the result, not
+just assumed) — the check was dead code. Result: **39.6 µs → 30.5 µs**
+(1.3x faster), a cumulative 5.16x faster than the dictionary version, same
+accuracy (1.39×10⁻¹⁷). Report in
 `data/reporte_latencia_arboles_codegen_sin_nan.json`.
 
-**Tabla de búsqueda precomputada (probada, descartada tal cual):** idea —
-discretizar las 5 features en bins por cuantiles, evaluar el modelo una sola
-vez por combinación (393,216 combos, hora indexada exacta 0-23), y en
-decisión solo hacer `bisect` + un acceso a arreglo. Velocidad real:
-**1.15 µs/decisión — más rápido que el Ejecutor de Dominio 1** (26.5x más
-rápido que el código generado). **Pero destruye la detección**: al mismo
-umbral, precisión 91.4%→18.8%, recall 80.0%→27.5%. Causa encontrada: el
-binning por cuantiles colapsó `huella_categoria_cuenta` (la feature más
-importante, 0.945) a **1 solo bin real** de los 16 pedidos, y
-`conteo_ventana_global` a 2 de 8 — ambas features tienen distribuciones muy
-concentradas/discretas donde los cortes por cuantiles caen todos en el mismo
-valor. El techo de velocidad (1.15 µs) es real y vale la pena perseguir, pero
-el binning ingenuo por cuantiles no sirve para estas features específicas —
-pendiente rediseñar el binning (tratar `huella_categoria_cuenta` por sus
-valores discretos reales, no por cuantiles continuos) antes de que esta vía
-sea usable. Reporte en `data/reporte_tabla_lookup_dominio2.json`.
+**Precomputed lookup table (tried, discarded as-is):** idea — discretize the
+5 features into quantile bins, evaluate the model once per combination
+(393,216 combos, hour indexed exactly 0-23), and at decision time only do a
+`bisect` + an array access. Real speed: **1.15 µs/decision — faster than the
+Domain 1 Executor** (26.5x faster than the generated code). **But it wrecks
+detection**: at the same threshold, precision 91.4%→18.8%, recall
+80.0%→27.5%. Cause found: quantile binning collapsed
+`huella_categoria_cuenta` (the most important feature, 0.945) to **only 1
+real bin** out of the 16 requested, and `conteo_ventana_global` to 2 out of
+8 — both features have very concentrated/discrete distributions where the
+quantile cuts all land on the same value. The speed ceiling (1.15 µs) is
+real and worth pursuing, but naive quantile binning doesn't work for these
+specific features — the binning needs to be redesigned (treat
+`huella_categoria_cuenta` by its real discrete values, not continuous
+quantiles) before this route is usable. Report in
+`data/reporte_tabla_lookup_dominio2.json`.
 
-**Estado de la exploración de latencia (actualizado, ver tercera ronda abajo):**
-30.5 µs (código generado sin NaN) fue el mejor resultado sin tabla. La tabla
-de búsqueda se resolvió del todo en la tercera ronda — ver más abajo.
+**Latency exploration status (updated, see third round below):** 30.5 µs
+(generated code, no NaN) was the best result without a table. The lookup
+table was fully resolved in the third round — see below.
 
-### Tercera ronda (2026-09-13) — tabla de búsqueda con umbrales reales del modelo: exacta y más rápida que Dominio 1
+### Third round (2026-09-13) — a lookup table with the model's real thresholds: exact and faster than Domain 1
 
-La v1 de la tabla (cuantiles ingenuos, 16 bins por feature) **destruía la
-detección** (precisión 91.4%→18.8% al mismo umbral) porque el binning por
-cuantiles colapsaba `huella_categoria_cuenta` (la feature más importante) a
-1 solo bin real — esa feature tiene solo 40 valores discretos y el 97.7% de
-las filas caen exactamente en 1.0, así que los cortes por cuantiles caían
-todos en el mismo punto. La v2 (índices exactos para `hora`/`conteo_ventana_global`/
-`huella_categoria_cuenta`, cuantiles solo para `amt`/`monto_ewma_cuenta`)
-mejoró mucho (precisión 85.2% vs. 91.4%, 1.90 µs) pero seguía siendo una
-aproximación.
+The v1 table (naive quantiles, 16 bins per feature) **wrecked detection**
+(precision 91.4%→18.8% at the same threshold) because quantile binning
+collapsed `huella_categoria_cuenta` (the most important feature) to 1 real
+bin — that feature has only 40 discrete values, and 97.7% of rows land
+exactly on 1.0, so the quantile cuts all fell on the same point. The v2
+(exact indices for `hora`/`conteo_ventana_global`/`huella_categoria_cuenta`,
+quantiles only for `amt`/`monto_ewma_cuenta`) improved a lot (precision
+85.2% vs. 91.4%, 1.90 µs) but was still an approximation.
 
-**Solución definitiva (v3):** en vez de cuantiles o índices ad-hoc, los bins
-de la tabla se definen con **los umbrales reales que el propio modelo
-aprendió** — extraídos de los nodos de los 175 árboles (`amt`: 44 umbrales
-únicos, `hora`: 14, `conteo_ventana_global`: **solo 1** — explica por qué su
-importancia individual era tan baja, `monto_ewma_cuenta`: 26,
-`huella_categoria_cuenta`: 18). Como el árbol nunca distingue dos valores
-que caen en el mismo intervalo entre dos umbrales consecutivos, la tabla
-queda **exacta por construcción**, no aproximada — y del tamaño mínimo
-posible: 692,550 combinaciones (vs. millones si se usara resolución
-arbitraria).
+**Definitive solution (v3):** instead of quantiles or ad-hoc indices, the
+table's bins are defined by **the real thresholds the model itself
+learned** — extracted from the nodes of the 175 trees (`amt`: 44 unique
+thresholds, `hora`: 14, `conteo_ventana_global`: **only 1** — which explains
+why its individual importance was so low, `monto_ewma_cuenta`: 26,
+`huella_categoria_cuenta`: 18). Since a tree never distinguishes two values
+that fall within the same interval between two consecutive thresholds, the
+table ends up **exact by construction**, not approximate — and at the
+smallest possible size: 692,550 combinations (vs. millions if using
+arbitrary resolution).
 
-**Bug real encontrado y corregido en el camino:** la primera versión de v3
-dio `diff_max=0.43` en 33 de 234,189 filas — causa: `bisect.bisect_right`
-enruta un valor *exactamente igual* a un umbral al bin de la derecha, pero
-el árbol compara con `<=` (va a la izquierda). Corregido a
-`bisect.bisect_left`, reverificado sobre las 234,189 filas completas (no una
-muestra): **MAE=0, diferencia máxima=0, correlación=1.000000** — reproducción
-bit-perfecta.
+**Real bug found and fixed along the way:** the first version of v3 gave
+`diff_max=0.43` on 33 of 234,189 rows — cause: `bisect.bisect_right` routes
+a value *exactly equal* to a threshold to the right-hand bin, but the tree
+compares with `<=` (goes left). Fixed by switching to `bisect.bisect_left`,
+re-verified over the full 234,189 rows (not a sample): **MAE=0, maximum
+difference=0, correlation=1.000000** — a bit-perfect reproduction.
 
-| Evaluador | Latencia/decisión | Exactitud |
+| Evaluator | Latency/decision | Accuracy |
 |---|---|---|
-| Diccionarios | 157.3 µs | Exacta |
-| Código generado, sin NaN | 30.5 µs | Exacta |
-| Tabla v1 (cuantiles ingenuos) | 1.15 µs | Rota (91.4%→18.8% precisión) |
-| Tabla v2 (índices parciales) | 1.90 µs | Aproximada (~6 pts de precisión) |
-| **Tabla v3 (umbrales reales del modelo)** | **1.53 µs** | **Exacta (bit-perfecta)** |
-| Ejecutor Dominio 1 (referencia) | 8.33 µs | — |
+| Dictionaries | 157.3 µs | Exact |
+| Generated code, no NaN | 30.5 µs | Exact |
+| Table v1 (naive quantiles) | 1.15 µs | Broken (91.4%→18.8% precision) |
+| Table v2 (partial indices) | 1.90 µs | Approximate (~6 pts of precision) |
+| **Table v3 (model's real thresholds)** | **1.53 µs** | **Exact (bit-perfect)** |
+| Domain 1 Executor (reference) | 8.33 µs | — |
 
-**Resultado final: 5.43x más rápido que el Ejecutor de Dominio 1, sin perder
-ni un bit de precisión.** Reportes en `data/reporte_tabla_lookup_dominio2.json`
+**Final result: 5.43x faster than the Domain 1 Executor, without losing a
+single bit of accuracy.** Reports in `data/reporte_tabla_lookup_dominio2.json`
 (v1), `data/reporte_tabla_lookup_v2.json` (v2), `data/reporte_tabla_lookup_v3_exacta.json`
-(v3, definitivo). Script de construcción de la tabla sigue en el scratchpad
-de la sesión — pendiente pasar a `src/` si se retoma la integración de
-producción (sección 6, punto 2): la tabla v3 debería ser el mecanismo real
-del nuevo Ejecutor de árboles, no el código generado ni los diccionarios.
+(v3, final). The table-building script is still in the session scratchpad —
+pending a move into `src/` if production integration is resumed (section 6,
+item 2): the v3 table should be the real mechanism of the new tree Executor,
+not the generated code or the dictionaries.
 
-**Nota para producción, si se retoma:** el tamaño de la tabla (692,550
-combinaciones, ~5.5MB en float64) depende de cuántos umbrales aprenda el
-modelo — si se reentrena con más árboles o distinto `max_depth`, hay que
-reconstruir la tabla (no es estática); el mismo generador de umbrales +
-tabla debe ser parte del pipeline de publicación del artefacto, no un paso
-manual.
+**Note for production, if resumed:** the table's size (692,550 combinations,
+~5.5MB in float64) depends on how many thresholds the model learns — if
+retrained with more trees or a different `max_depth`, the table needs to be
+rebuilt (it's not static); the same threshold generator + table should be
+part of the artifact publishing pipeline, not a manual step.
 
-## 7. Afinamiento en curso — importancia de features (hallazgo, no concluido)
+## 7. Ongoing tuning — feature importance (finding, not concluded)
 
-A pedido explícito del usuario, la integración de producción (sección 6)
-queda **pausada hasta terminar de afinar el modelo** — "antes de empezar
-cualquier dominio necesitamos afinar el modelo completamente".
+At the user's explicit request, production integration (section 6) is
+**paused until the model is fully tuned** — "before starting any domain we
+need to finish tuning the model completely."
 
-`permutation_importance` (scoring=`average_precision`, sobre val) del modelo
-Gradient Boosting de la sección 5:
+`permutation_importance` (scoring=`average_precision`, on val) of the
+Gradient Boosting model from section 5:
 
-| Feature | Importancia |
+| Feature | Importance |
 |---|---|
 | **huella_categoria_cuenta** | **0.945** |
 | **amt** | **0.552** |
@@ -284,144 +281,144 @@ Gradient Boosting de la sección 5:
 | monto_ewma_global | 0.005 |
 | conteo_ventana_cuenta | 0.002 |
 
-**Hallazgo honesto, sin resolver todavía:** dos features (huella + monto)
-concentran casi toda la importancia. Las 4 features recursivas heredadas del
-enfoque del Dominio 1 (EWMA/conteo, global y por cuenta) aportan muy poco una
-vez que el modelo no lineal ya tiene huella+monto — puede ser redundancia
-real (Gradient Boosting infiere de huella+monto lo mismo que esas features
-aportarían) o una señal de que esas features necesitan mejor diseño para este
-dominio específico. Sin conclusión aún.
+**Honest finding, still unresolved:** two features (fingerprint + amount)
+concentrate almost all the importance. The 4 recursive features inherited
+from the Domain 1 approach (EWMA/count, global and per account) contribute
+very little once the non-linear model already has fingerprint+amount — this
+could be genuine redundancy (Gradient Boosting infers from
+fingerprint+amount the same thing those features would contribute) or a
+signal that those features need better design for this specific domain. No
+conclusion yet.
 
-## Plan de afinamiento — completo, los 5 pasos cerrados
+## Tuning plan — complete, all 5 steps closed
 
-### Paso 1 — Validación cruzada multi-fold
+### Step 1 — Multi-fold cross-validation
 
-5 folds walk-forward (ventana expansiva, mismo criterio que
-`validacion_cruzada.py` del Dominio 1), set de 7 features, `max_depth=6`:
+5 walk-forward folds (expanding window, same criterion as Domain 1's
+`validacion_cruzada.py`), the 7-feature set, `max_depth=6`:
 
-AUC-PR por fold: 0.913, 0.948, 0.932, 0.962, 0.966 → **media 0.944 ± 0.020**.
-Estable entre los 5 cortes temporales — no es un accidente de un solo split.
+AUC-PR per fold: 0.913, 0.948, 0.932, 0.962, 0.966 → **mean 0.944 ± 0.020**.
+Stable across the 5 temporal cuts — not an accident of a single split.
 
-### Paso 2 — Chequeo de sobreajuste
+### Step 2 — Overfitting check
 
-Gap train-val por fold: +0.008, -0.002, -0.018, +0.017, +0.002 — insignificante,
-y en 2 de 5 folds val superó a train. **Sin sobreajuste.**
+Train-val gap per fold: +0.008, -0.002, -0.018, +0.017, +0.002 —
+negligible, and in 2 of 5 folds val beat train. **No overfitting.**
 
-### Paso 3 — Features de bajo aporte
+### Step 3 — Low-contribution features
 
-Ablation multi-fold (3 sets de features):
+Multi-fold ablation (3 feature sets):
 
-| Set | AUC-PR media |
+| Set | Mean AUC-PR |
 |---|---|
-| A: completo (7 features) | 0.944 ± 0.020 |
-| B: sin `monto_ewma_global` + `conteo_ventana_cuenta` (5 features) | 0.939 ± 0.016 |
-| C: solo `amt` + `huella_categoria_cuenta` (2 features) | 0.821 ± 0.019 |
+| A: full (7 features) | 0.944 ± 0.020 |
+| B: without `monto_ewma_global` + `conteo_ventana_cuenta` (5 features) | 0.939 ± 0.016 |
+| C: only `amt` + `huella_categoria_cuenta` (2 features) | 0.821 ± 0.019 |
 
-B ≈ A (diferencia dentro del ruido) → esas 2 features se descartan sin
-pérdida real. C cae de verdad → `hora`, `monto_ewma_cuenta` y
-`conteo_ventana_global` sí aportan valor en conjunto pese a que su
-importancia individual (sección 7) se viera modesta.
+B ≈ A (difference within noise) → those 2 features can be dropped with no
+real loss. C drops for real → `hora`, `monto_ewma_cuenta`, and
+`conteo_ventana_global` do add value together despite their modest
+individual importance (section 7).
 
-**Set final de producción: 5 features** — `amt`, `hora`,
+**Final production set: 5 features** — `amt`, `hora`,
 `conteo_ventana_global`, `monto_ewma_cuenta`, `huella_categoria_cuenta`.
 
-### Paso 4 — Búsqueda de hiperparámetros
+### Step 4 — Hyperparameter search
 
-Grid de 12 combinaciones (`max_depth` ∈ {3,5,8}, `learning_rate` ∈
-{0.05,0.1}, `max_iter` ∈ {200,300}) × 3 folds, sobre el set de 5 features.
+A 12-combination grid (`max_depth` ∈ {3,5,8}, `learning_rate` ∈
+{0.05,0.1}, `max_iter` ∈ {200,300}) × 3 folds, on the 5-feature set.
 
-Hallazgo real: **`max_depth=8` empeora y se vuelve inestable** (AUC-PR
-0.84-0.90, std hasta 0.084) — sobreajuste claro con árboles profundos dado
-que solo hay 99 cuentas. `max_depth=3` es mejor y más estable que el 6 usado
-originalmente. `max_iter` no importa (200 = 300, converge antes).
+Real finding: **`max_depth=8` gets worse and becomes unstable** (AUC-PR
+0.84-0.90, std up to 0.084) — clear overfitting with deep trees given only
+99 accounts. `max_depth=3` is better and more stable than the 6 originally
+used. `max_iter` doesn't matter (200 = 300, converges earlier).
 
-**Configuración ganadora:** `max_depth=3, learning_rate=0.05, max_iter=200`.
-Validación final de 5 folds con esta configuración: 0.943, 0.975, 0.975,
-0.960, 0.978 → **AUC-PR 0.966 ± 0.013** — mejor y más estable que la
-configuración original (0.944 ± 0.020).
+**Winning configuration:** `max_depth=3, learning_rate=0.05, max_iter=200`.
+Final 5-fold validation with this configuration: 0.943, 0.975, 0.975,
+0.960, 0.978 → **AUC-PR 0.966 ± 0.013** — better and more stable than the
+original configuration (0.944 ± 0.020).
 
-### Paso 5 — Calibración de probabilidades
+### Step 5 — Probability calibration
 
-**Hallazgo real:** los scores crudos están severamente mal calibrados en el
-rango medio-alto — consecuencia esperada de balancear artificialmente las
-clases con `sample_weight` al entrenar (afecta las probabilidades, no el
-orden, por eso el AUC-PR no lo delataba).
+**Real finding:** raw scores are severely miscalibrated in the mid-high
+range — an expected consequence of artificially balancing classes with
+`sample_weight` during training (it affects probabilities, not the
+ranking, which is why AUC-PR didn't expose it).
 
-| Percentil de score (test) | Score crudo promedio | Tasa real de fraude |
+| Score percentile (test) | Average raw score | Real fraud rate |
 |---|---|---|
 | 99.5-99.9% | 45.5% | 0.85% |
 | 99.9-99.99% | 98.9% | 79.9% |
 | 99.99-100% | 99.95% | 100% |
 
-Corregido con `IsotonicRegression` (ajustada en VAL, aplicada a TEST, nunca
-al revés): **Brier score 0.00124 → 0.00013 (9.5x mejor)**, costo mínimo en
-AUC-PR (0.973 crudo vs. 0.961 calibrado en ese split puntual — la validación
-robusta de 5 folds, 0.966±0.013, es la cifra que manda). Percentiles
-calibrados quedan cerca de la tasa real (0.59% / 79.2% / 100% vs. reales de
-0.85% / 79.9% / 100%).
+Fixed with `IsotonicRegression` (fit on VAL, applied to TEST, never the
+other way around): **Brier score 0.00124 → 0.00013 (9.5x better)**, minimal
+cost in AUC-PR (0.973 raw vs. 0.961 calibrated on that specific split — the
+robust 5-fold validation, 0.966±0.013, is the number that counts).
+Calibrated percentiles land close to the real rate (0.59% / 79.2% / 100%
+vs. real 0.85% / 79.9% / 100%).
 
-**Necesario si alguna vez se usa `costo_decision.py`** (Dominio 1) con este
-modelo — esa herramienta asume que el score es una probabilidad real, no solo
-un buen orden relativo.
+**Necessary if `costo_decision.py` (Domain 1) is ever used** with this
+model — that tool assumes the score is a real probability, not just a good
+relative ranking.
 
-## Estado: afinamiento completo, integración de producción completa (ver sección 13)
+## Status: tuning complete, production integration complete (see section 13)
 
-Los 5 pasos quedaron cerrados con resultado positivo en cada uno. Modelo
-final: Gradient Boosting, 5 features, `max_depth=3, learning_rate=0.05,
-max_iter=200`, con calibración isotónica como paso de post-procesamiento.
-La integración de producción (artefacto + Ejecutor + Ciclo, sección 6) se
-construyó el 2026-09-14 — ver sección 13 para el detalle y las cifras reales
-reproducidas.
+All 5 steps closed with a positive result on each. Final model: Gradient
+Boosting, 5 features, `max_depth=3, learning_rate=0.05, max_iter=200`, with
+isotonic calibration as a post-processing step. Production integration
+(artifact + Executor + Cycle, section 6) was built on 2026-09-14 — see
+section 13 for the detail and the real reproduced figures.
 
-## 8. Validación contra mercado LatAm real — corrección importante de prevalencia
+## 8. Validation against the real LatAm market — an important prevalence correction
 
-Se buscó un dataset transaccional de fraude público y descargable a nivel
-Latinoamérica: **no existe** (confirmado contra Kaggle, literatura académica y
-portales de datos abiertos gubernamentales de Colombia/México/Brasil). Sí se
-encontraron dos fuentes reales útiles:
+A search was made for a public, downloadable transactional fraud dataset at
+the Latin America level: **none exists** (confirmed against Kaggle,
+academic literature, and Colombia/Mexico/Brazil government open-data
+portals). Two real, useful sources were found instead:
 
-**a) Benchmark académico real** (Rugeles Diaz et al. 2025, *Financial
-Innovation*, datos reales de una pasarela de pago de 7 países LatAm,
-221,292 transacciones de 2022, fraude real 1%): evaluación honesta sobre
-datos desbalanceados (su Tabla 14, no la Tabla 11-13 que usa una muestra
-rebalanceada y por eso infla las métricas) da **AUC 0.85-0.90, F1 0.60-0.65**
-por segmento de comercio. El dataset crudo es propietario, no descargable.
+**a) Real academic benchmark** (Rugeles Diaz et al. 2025, *Financial
+Innovation*, real data from a payment gateway across 7 LatAm countries,
+221,292 transactions from 2022, real fraud rate 1%): an honest evaluation on
+imbalanced data (their Table 14, not Tables 11-13, which use a rebalanced
+sample and so inflate the metrics) gives **AUC 0.85-0.90, F1 0.60-0.65** per
+merchant segment. The raw dataset is proprietary, not downloadable.
 
-**b) Dato oficial de tasa de fraude real** (Banco Central de Brasil, API
-pública Pix, `EstatisticasFraudesPix`): fraude confirmado ≈ **4.5-5.4 casos
-por cada 100,000 transacciones (≈0.005%)**, muy por debajo del 0.077% de
-fraude que tiene nuestro dataset sintético Sparkov (907/1,170,945).
+**b) Official real fraud-rate figure** (Central Bank of Brazil, public Pix
+API, `EstatisticasFraudesPix`): confirmed fraud ≈ **4.5-5.4 cases per
+100,000 transactions (≈0.005%)**, far below the 0.077% fraud rate in our
+synthetic Sparkov dataset (907/1,170,945).
 
-**Corrección honesta que esto obliga a hacer:** la precisión reportada en la
-sección 7 (83-97% según el recall elegido) asume la prevalencia sintética de
-Sparkov. Recalculando con la prevalencia real de mercado (~0.005%, vía
-Bayes, manteniendo el mismo TPR/FPR del modelo):
+**Honest correction this forces:** the precision reported in section 7
+(83-97% depending on the recall chosen) assumes Sparkov's synthetic
+prevalence. Recalculating with the real market prevalence (~0.005%, via
+Bayes, keeping the model's same TPR/FPR):
 
-| Recall | Precisión (prevalencia sintética 0.07%) | Precisión (prevalencia real ~0.005%) |
+| Recall | Precision (synthetic prevalence 0.07%) | Precision (real prevalence ~0.005%) |
 |---|---|---|
 | 90% | 83% | 26% |
 | 80% | 91% | 41% |
 | 76% | 97% | 69% |
 
-**Conclusión:** el modelo sigue siendo útil y comparable o mejor que el
-benchmark académico real de LatAm (F1 0.60-0.65), pero la afirmación previa
-de "muy por encima del mercado" estaba inflada por el desbalance artificial
-del dataset sintético, no por una capacidad real superior del modelo. Antes
-de cualquier despliegue real, hay que recalibrar el umbral de decisión (y
-posiblemente `costo_decision.py`) contra la prevalencia real esperada en el
-mercado objetivo, no contra la del dataset de entrenamiento.
+**Conclusion:** the model is still useful and comparable to or better than
+the real LatAm academic benchmark (F1 0.60-0.65), but the earlier claim of
+"well above the market" was inflated by the synthetic dataset's artificial
+imbalance, not by real superior model capability. Before any real
+deployment, the decision threshold (and possibly `costo_decision.py`) needs
+to be recalibrated against the real prevalence expected in the target
+market, not the training dataset's.
 
-## 9. Curva completa recalculada contra prevalencia real (2026-09-13)
+## 9. Full curve recalculated against real prevalence (2026-09-13)
 
-Se rehizo el entrenamiento (mismo modelo final: Gradient Boosting,
-`max_depth=3, learning_rate=0.05, max_iter=200`, 5 features, split temporal
-60/20/20) para obtener TPR/FPR en toda la curva de umbrales del set de TEST
-(234,189 filas, 200 fraudes reales), no solo los 3 puntos de la sección 8.
-Precisión recalculada vía Bayes con la misma fórmula
-(`TPR·π' / (TPR·π' + FPR·(1-π'))`), `π'` = 4.95×10⁻⁵ (punto medio del rango
-BCB Pix 4.5-5.4/100k):
+Training was redone (same final model: Gradient Boosting,
+`max_depth=3, learning_rate=0.05, max_iter=200`, 5 features, 60/20/20
+temporal split) to get TPR/FPR across the full threshold curve on the TEST
+set (234,189 rows, 200 real frauds), not just the 3 points from section 8.
+Precision recalculated via Bayes with the same formula
+(`TPR·π' / (TPR·π' + FPR·(1-π'))`), `π'` = 4.95×10⁻⁵ (midpoint of the BCB
+Pix range, 4.5-5.4/100k):
 
-| Recall | Precisión (sintética) | Precisión (mercado real ~0.005%) |
+| Recall | Precision (synthetic) | Precision (real market ~0.005%) |
 |---|---|---|
 | 5-40% | 100% | 100% |
 | 45% | 97.8% | 72.3% |
@@ -432,642 +429,639 @@ BCB Pix 4.5-5.4/100k):
 | 90% | 83.0% | 22.1% |
 | 95% | 67.0% | 10.5% |
 
-Curva completa (19 puntos, cada 5% de recall) en
+Full curve (19 points, every 5% of recall) in
 `data/reporte_precision_recall_prevalencia_real.json`.
 
-**Hallazgo nuevo, no reportado antes:** entre 5% y 40% de recall el modelo
-tiene **cero falsos positivos** (precisión 100% en ambas prevalencias) — casi
-seguro es la detección trivial de las 12 cuentas "perfil de fraude puro"
-(sección 1), no señal generalizable a fraude en cuentas normales. La caída
-fuerte de precisión empieza justo después de 40-45% de recall, que es donde
-se agotan esas cuentas triviales y el modelo pasa a detectar fraude real en
-cuentas normales — ese es el tramo que importa para juzgar el modelo, no el
-90% de precisión "aparente" en la parte baja de la curva.
+**New finding, not previously reported:** between 5% and 40% recall the
+model has **zero false positives** (100% precision at both prevalences) —
+almost certainly the trivial detection of the 12 "pure fraud profile"
+accounts (section 1), not signal that generalizes to fraud in normal
+accounts. The sharp precision drop starts right after 40-45% recall, which
+is where those trivial accounts run out and the model shifts to detecting
+real fraud in normal accounts — that's the range that matters for judging
+the model, not the "apparent" 90% precision in the low part of the curve.
 
-Consistente con los 3 puntos previos de la sección 8 (recall 90/80% → 83%/91%
-sintética, 22%/38% real — la sección 8 daba 26%/41%, diferencia esperable por
-variación de split/semilla, no una contradicción).
+Consistent with the 3 earlier points from section 8 (recall 90/80% → 83%/91%
+synthetic, 22%/38% real — section 8 gave 26%/41%, an expected difference
+from split/seed variation, not a contradiction).
 
-## 10. Señales de red entre cuentas (colusión) — intento negativo (2026-09-13)
+## 10. Cross-account network signals (collusion) — a negative attempt (2026-09-13)
 
-Pendiente antiguo de la sección "Pendiente explícito" de más abajo: probar si
-existe estructura de colusión (cuentas conectadas por comercio/dispositivo
-compartido) usando dimensión fractal de redes (box-covering, Song/Havlin/Makse
-2005, *Nature* — método real y establecido para medir auto-similitud en
-grafos, no una metáfora).
+An old item from the "Explicitly pending" list below: test whether there is
+collusion structure (accounts connected by shared merchant/device) using the
+fractal dimension of networks (box-covering, Song/Havlin/Makse 2005,
+*Nature* — a real, established method for measuring self-similarity in
+graphs, not a metaphor).
 
-**Intento 1, descartado sin correr:** usar `merch_lat`/`merch_long` de Sparkov
-como proxy de identidad de comercio. Verificado que **cada transacción tiene
-una combinación única** de lat/long (1,170,945 de 1,170,945) — Sparkov le
-pone ruido GPS a cada transacción, la ubicación no identifica comercio.
-Recuperar el campo `merchant` real requeriría regenerar el dataset completo
-con Sparkov_Data_Generation — **probado y descartado por lentitud real**: un
-test de solo 2 clientes × 10 días tardó >13 minutos sin terminar en esta
-máquina (el benchmark del README asume 64 núcleos/128 hilos). Además,
-inspeccionando `datagen_transaction.py`, el comercio se asigna por
-`random.sample()` independiente por transacción — no es reconstruible desde
-los datos ya generados sin re-simular la secuencia aleatoria completa.
+**Attempt 1, dropped without running:** use Sparkov's `merch_lat`/`merch_long`
+as a merchant-identity proxy. Verified that **every transaction has a
+unique** lat/long combination (1,170,945 of 1,170,945) — Sparkov adds GPS
+noise to every transaction, so location doesn't identify the merchant.
+Recovering the real `merchant` field would require regenerating the entire
+dataset with Sparkov_Data_Generation — **tried and dropped for real
+slowness**: a test with just 2 customers × 10 days took >13 minutes without
+finishing on this machine (the README's benchmark assumes 64 cores/128
+threads). Also, inspecting `datagen_transaction.py`, the merchant is
+assigned via an independent `random.sample()` per transaction — it's not
+reconstructible from the already-generated data without re-simulating the
+entire random sequence.
 
-**Intento 2, ejecutado con IEEE-CIS (ya descargado, sin esperar nada):**
-grafo cuenta(`card1`)–cuenta vía `DeviceInfo` compartido (identity table).
-Filtrados nombres genéricos de SO/navegador (`Windows`, `iOS Device`,
-`MacOS`, versiones de Firefox) que no son dispositivos reales — quedaron
-26,529 filas con modelo de dispositivo específico, 1,203 dispositivos
-compartidos por >1 cuenta. Grafo resultante: 2,254 nodos en la componente
-conexa mayor, 96,773 aristas.
+**Attempt 2, run against IEEE-CIS (already downloaded, no wait involved):**
+an account(`card1`)–account graph via shared `DeviceInfo` (identity table).
+Generic OS/browser names (`Windows`, `iOS Device`, `MacOS`, Firefox
+versions) were filtered out as not real devices — left with 26,529 rows
+with a specific device model, 1,203 devices shared by >1 account. Resulting
+graph: 2,254 nodes in the largest connected component, 96,773 edges.
 
-**Resultado: negativo.** Dimensión fractal del grafo real (3.91, R²=0.93)
-**prácticamente igual** a la de un grafo de control aleatorio con la misma
-secuencia de grados (4.05, R²=0.89) — la prueba diagnóstica central del
-método (real vs. modelo nulo con mismos grados) no encontró diferencia. No
-hay evidencia de estructura de colusión con este proxy. Causa probable:
-`DeviceInfo` es un **modelo de teléfono** (ej. "Samsung Galaxy S7"), no un
-identificador único de aparato físico — cientos de cuentas no relacionadas
-"comparten" el mismo modelo simplemente por ser un teléfono popular, mismo
-problema de fondo que descartó la vía de lat/long (proxy de popularidad, no
-de identidad real).
+**Result: negative.** The real graph's fractal dimension (3.91, R²=0.93) is
+**practically identical** to that of a random control graph with the same
+degree sequence (4.05, R²=0.89) — the method's central diagnostic test
+(real vs. null model with the same degrees) found no difference. No
+evidence of collusion structure with this proxy. Likely cause: `DeviceInfo`
+is a **phone model** (e.g. "Samsung Galaxy S7"), not a unique physical
+device identifier — hundreds of unrelated accounts "share" the same model
+simply for being a popular phone, the same underlying problem that ruled
+out the lat/long route (a popularity proxy, not a real identity one).
 
-**Para hacerlo bien de verdad** (no intentado, es ingeniería real no
-trivial): combinar `card1+card2+card5+addr1+D1` como pseudo-identidad de
-cuenta (técnica conocida de las soluciones ganadoras de esa competencia de
-Kaggle) y varios campos `id_3x` juntos como huella de dispositivo, en vez de
-un solo campo. Reporte completo en `data/reporte_grafo_fractal_ieee.json`.
+**To do this properly** (not attempted, real non-trivial engineering):
+combine `card1+card2+card5+addr1+D1` as a pseudo account identity (a known
+technique from that Kaggle competition's winning solutions) and several
+`id_3x` fields together as a device fingerprint, instead of a single field.
+Full report in `data/reporte_grafo_fractal_ieee.json`.
 
-## Pendiente explícito, sin iniciar
+## Explicitly pending, not started
 
-- Probar el modelo/enfoque contra datasets de fraude de Norteamérica,
-  Centroamérica y Europa — **CERRADO 2026-09-13**: se probaron IEEE-CIS
-  (Norteamérica, prevalencia 3.50%) y el dataset europeo clásico ULB/`creditcard.csv`
-  (prevalencia 0.17%). El patrón de prevalencia-inflada-en-sintéticos/curados
-  **no es específico de LatAm** — se repite en los tres continentes, con la
-  brecha más extrema en IEEE-CIS (700x la tasa real vs. 14x en Sparkov y 34x
-  en el europeo). Ver tabla comparativa en la sesión del 2026-09-13.
-- Construir la integración de producción de la sección 6 (artefacto de
-  árboles + Ejecutor compatible + calibración isotónica como parte del
-  artefacto) — **CERRADO 2026-09-14**, ver sección 13.
-- Validación exploratoria barata de señales de red entre cuentas (colusión) —
-  requiere recuperar el campo `merchant`, descartado al combinar los archivos.
-  **Intentado 2026-09-13, resultado negativo, ver detalle abajo.**
-- Point-in-time encoding de `category` (sección 2), si se retoma esa feature —
-  **CERRADO 2026-09-14, resultado positivo**, ver sección 15.
-- Huella de comportamiento con decaimiento tipo EWMA en vez de ventana de
-  conteo fijo — **CERRADO 2026-09-14, resultado negativo/inconcluso**, ver
-  sección 15.
+- Test the model/approach against North American, Central American, and
+  European fraud datasets — **CLOSED 2026-09-13**: IEEE-CIS (North America,
+  3.50% prevalence) and the classic European ULB/`creditcard.csv` dataset
+  (0.17% prevalence) were tested. The inflated-prevalence-in-synthetic/curated
+  pattern **isn't LatAm-specific** — it repeats across all three continents,
+  with the most extreme gap in IEEE-CIS (700x the real rate vs. 14x in
+  Sparkov and 34x in the European one). See the comparison table in the
+  2026-09-13 session.
+- Build the production integration from section 6 (tree artifact +
+  compatible Executor + isotonic calibration as part of the artifact) —
+  **CLOSED 2026-09-14**, see section 13.
+- Cheap exploratory validation of cross-account network signals (collusion)
+  — requires recovering the `merchant` field, dropped when the files were
+  combined. **Attempted 2026-09-13, negative result, see detail above.**
+- Point-in-time encoding of `category` (section 2), if that feature is
+  revisited — **CLOSED 2026-09-14, positive result**, see section 15.
+- Behavior fingerprint with EWMA-style decay instead of a fixed-count
+  window — **CLOSED 2026-09-14, negative/inconclusive result**, see
+  section 15.
 
-## 11. Saerens-Latinne-Decaestecker (SLD) — corrección de prevalencia más rigurosa (2026-09-13)
+## 11. Saerens-Latinne-Decaestecker (SLD) — a more rigorous prevalence correction (2026-09-13)
 
-Método estándar de la industria (EM iterativo) para estimar/corregir la
-prevalencia real cuando difiere de la de entrenamiento — más riguroso que el
-Bayes de un solo punto de la sección 8/9.
+An industry-standard method (iterative EM) for estimating/correcting real
+prevalence when it differs from the training prevalence — more rigorous
+than the single-point Bayes estimate from sections 8/9.
 
-**Primer intento, falló (100% de error):** alimentar SLD con los scores
-crudos del modelo (sin calibrar) hizo que el EM divergiera a un prior
-estimado de ~0 en vez de la prevalencia real del test (0.0854%). Causa: SLD
-asume probabilidades de entrada bien calibradas, y ya sabíamos (Paso 5 del
-afinamiento) que los scores crudos NO lo están.
+**First attempt, failed (100% error):** feeding SLD the model's raw
+(uncalibrated) scores made the EM diverge to an estimated prior of ~0
+instead of the test's real prevalence (0.0854%). Cause: SLD assumes
+well-calibrated input probabilities, and it was already known (tuning
+Step 5) that the raw scores are NOT calibrated.
 
-**Corregido:** calibrar con `IsotonicRegression` (ajustada en VAL, igual que
-el Paso 5) antes de correr SLD, usando como prior de entrenamiento la
-prevalencia real de VAL (no un 50/50 asumido). Con eso, SLD estimó la
-prevalencia del test **sin ver las etiquetas**: 0.0896% vs. la real
-0.0854% — **error relativo 4.87%**. Validación real y positiva: el método
-funciona una vez que se respeta su supuesto de calibración.
+**Fixed:** calibrate with `IsotonicRegression` (fit on VAL, same as Step 5)
+before running SLD, using VAL's real prevalence as the training prior
+(not an assumed 50/50). With that, SLD estimated the test prevalence
+**without seeing the labels**: 0.0896% vs. the real 0.0854% — **4.87%
+relative error**. A real, positive validation: the method works once its
+calibration assumption is respected.
 
-**Error de interpretación propio, encontrado y corregido en el momento:**
-intenté recalcular "precisión por nivel de recall" usando las probabilidades
-reajustadas por SLD contra la prevalencia real asumida — el resultado
-coincidía con la columna *sintética* de la sección 9 (91.4% a 80% recall),
-no con la columna de mercado real (38.2%). Razón: la precisión TP/(TP+FP)
-calculada sobre las etiquetas reales del test siempre refleja la
-composición real de ESE test (prevalencia sintética) sin importar qué
-probabilidad recalibrada se le asigne a cada fila — recalibrar el score no
-cambia las etiquetas ni los conteos. **La curva de precisión/recall contra
-prevalencia real de la sección 9 (Bayes sobre TPR/FPR) sigue siendo la
-correcta y no cambia con esto.**
+**Own interpretation error, found and corrected on the spot:** an attempt
+was made to recompute "precision by recall level" using SLD's rescaled
+probabilities against the assumed real prevalence — the result matched the
+*synthetic* column from section 9 (91.4% at 80% recall), not the real-market
+column (38.2%). Reason: precision TP/(TP+FP) computed over the test's real
+labels always reflects that test's actual composition (synthetic
+prevalence) no matter what recalibrated probability gets assigned to each
+row — rescaling the score doesn't change the labels or the counts. **The
+precision/recall-against-real-prevalence curve from section 9 (Bayes over
+TPR/FPR) is still the correct one and doesn't change because of this.**
 
-**Lo que SLD sí aporta, validado y nuevo:**
-1. Estimación de la prevalencia real sin necesitar un dato externo (como el
-   de BCB Pix) — útil si en el futuro no hay una tasa de mercado conocida a
-   priori, solo datos de producción sin etiquetar.
-2. Probabilidad recalibrada por transacción individual (no solo puntos
-   agregados de una curva) — útil para un umbral absoluto de negocio ("marcar
-   para revisión manual si probabilidad ajustada > X%"), complementario a la
-   curva de la sección 9, no un reemplazo.
+**What SLD does genuinely add, validated and new:**
+1. Estimating real prevalence without needing external data (like the BCB
+   Pix figure) — useful if in the future there's no known a priori market
+   rate, only unlabeled production data.
+2. A rescaled probability per individual transaction (not just aggregate
+   points on a curve) — useful for an absolute business threshold ("flag
+   for manual review if adjusted probability > X%"), complementary to
+   section 9's curve, not a replacement.
 
-Reporte completo (con ambos intentos) en `data/reporte_sld_prior_shift.json`.
+Full report (with both attempts) in `data/reporte_sld_prior_shift.json`.
 
-## 12. Benchmark contra datasets reales (IEEE-CIS, ULB) y deriva de concepto (2026-09-13)
+## 12. Benchmark against real datasets (IEEE-CIS, ULB) and concept drift (2026-09-13)
 
-Motivado por evaluar honestamente si el enfoque "compite con el mercado" en
-detección, no solo en latencia (que sí está confirmado, sección 6).
+Motivated by honestly evaluating whether the approach "competes with the
+market" on detection, not just on latency (which is already confirmed,
+section 6).
 
-**Benchmark en ULB `creditcard.csv` (real, Europa):** misma disciplina
-metodológica (split temporal, Gradient Boosting, grid de hiperparámetros)
-aplicada a los datos reales de esta dataset (no a Sparkov). Resultado:
-AUC-ROC 0.982, AUC-PR 0.780 (split temporal) / 0.817 (split aleatorio,
-igualando la metodología típica de notebooks públicos). **Por debajo** del
-mejor resultado publicado conocido (XGBoost afinado, AUC-PR 0.9133) — ni
-ajustando hiperparámetros (grid de 12) ni igualando el split cerramos esa
-brecha. Reportes en `data/reporte_benchmark_ulb*.json`.
+**Benchmark on ULB `creditcard.csv` (real, Europe):** the same methodological
+discipline (temporal split, Gradient Boosting, hyperparameter grid) applied
+to this dataset's real data (not Sparkov). Result: AUC-ROC 0.982, AUC-PR
+0.780 (temporal split) / 0.817 (random split, matching the typical
+methodology of public notebooks). **Below** the best known published result
+(tuned XGBoost, AUC-PR 0.9133) — neither tuning hyperparameters (grid of 12)
+nor matching the split closed that gap. Reports in
+`data/reporte_benchmark_ulb*.json`.
 
-**Conclusión honesta:** en detección, **no superamos el estado del arte
-publicado** en datos reales — somos competitivos, no superiores. La ventaja
-real y confirmada sigue siendo la latencia (sección 6), no la detección.
+**Honest conclusion:** on detection, **we don't beat the published state of
+the art** on real data — we're competitive, not superior. The real,
+confirmed advantage remains latency (section 6), not detection.
 
-**Deriva de concepto (Sparkov, dentro del propio tramo de test 2023-2026):**
-AUC-PR por año calendario: 2024→0.971, 2025→0.922, 2026(parcial)→0.892 —
-**caída consistente y monótona**, mientras AUC-ROC se mantiene ~1.0 en los
-tres (confirma otra vez que AUC-ROC esconde el deterioro, igual que en la
-sección 4). Con ~4 puntos de AUC-PR de caída por año, **reentrenar al menos
-anualmente sería razonable** en un despliegue real — aunque con solo 35-106
-fraudes por año la pendiente exacta tiene incertidumbre estadística real, la
-dirección (siempre bajando) es consistente en los 3 períodos, no un
-accidente de un corte. Reporte en `data/reporte_concept_drift_sparkov.json`.
+**Concept drift (Sparkov, within the test range itself, 2023-2026):**
+AUC-PR by calendar year: 2024→0.971, 2025→0.922, 2026(partial)→0.892 —
+**a consistent, monotonic drop**, while AUC-ROC stays ~1.0 across all
+three (confirming again that AUC-ROC hides the deterioration, same as in
+section 4). With ~4 points of AUC-PR drop per year, **retraining at least
+annually would be reasonable** in a real deployment — although with only
+35-106 frauds per year the exact slope has real statistical uncertainty,
+the direction (always dropping) is consistent across the 3 periods, not an
+accident of one cut. Report in `data/reporte_concept_drift_sparkov.json`.
 
-## 13. Integración de producción — construida y validada (2026-09-14)
+## 13. Production integration — built and validated (2026-09-14)
 
-Cierra el pendiente de la sección 6: el artefacto de árboles + Ejecutor
-compatible + `CicloDecision` paralelo, ya en `src/`, no en scripts de
-scratchpad. **Camino paralelo a Dominio 1, sin tocar ningún archivo
-existente** (`artefacto.py`, `ejecutor.py`, `ciclo.py`, `calibrador.py`,
-`features_recursivas.py`, `veto.py`, `puente.py` quedan intactos) — se
-reutilizan sin modificar `veto.py::evaluar` (independiente del modelo por
-diseño) y `features_recursivas.py::EstadoRecursivoGlobal`/`calcular_features_recursivas_batch`
-para `conteo_ventana_global` (misma métrica global de Dominio 1).
+Closes the pending item from section 6: the tree artifact + compatible
+Executor + a parallel `CicloDecision`, now in `src/`, not scratchpad
+scripts. **A path parallel to Domain 1, without touching any existing file**
+(`artefacto.py`, `ejecutor.py`, `ciclo.py`, `calibrador.py`,
+`features_recursivas.py`, `veto.py`, `puente.py` remain untouched) —
+`veto.py::evaluar` is reused unmodified (model-independent by design), as
+is `features_recursivas.py::EstadoRecursivoGlobal`/`calcular_features_recursivas_batch`
+for `conteo_ventana_global` (the same global metric from Domain 1).
 
-**Módulos nuevos:**
-- `src/features_recursivas_cuenta.py` — `monto_ewma_cuenta` y
-  `huella_categoria_cuenta` por cuenta (`EstadoRecursivoPorCuenta` para el
-  Ejecutor, `calcular_features_recursivas_cuenta_batch` para el Calibrador),
-  con la misma disciplina de paridad batch/incremental que Dominio 1
-  (verificada con test explícito, no solo compartiendo código).
-- `src/artefacto_arboles.py` — contrato neutral: en vez de serializar los
-  175 árboles para recorrerlos en caliente (más lento, ver sección 6), el
-  artefacto guarda directamente la **tabla de búsqueda v3** (umbrales reales
-  del modelo + tabla plana) y la calibración isotónica como breakpoints
-  `x`/`y` (interpolación lineal en Python puro, verificada idéntica a
+**New modules:**
+- `src/features_recursivas_cuenta.py` — `monto_ewma_cuenta` and
+  `huella_categoria_cuenta` per account (`EstadoRecursivoPorCuenta` for the
+  Executor, `calcular_features_recursivas_cuenta_batch` for the Calibrator),
+  with the same batch/incremental parity discipline as Domain 1 (verified
+  with an explicit test, not just by sharing code).
+- `src/artefacto_arboles.py` — a neutral contract: instead of serializing
+  the 175 trees to walk them on the hot path (slower, see section 6), the
+  artifact directly stores the **v3 lookup table** (the model's real
+  thresholds + a flat table) and the isotonic calibration as `x`/`y`
+  breakpoints (linear interpolation in pure Python, verified identical to
   `IsotonicRegression.predict(out_of_bounds="clip")`).
-- `src/calibrador_arboles.py` — entrena `HistGradientBoostingClassifier`
-  sobre `data/raw/sparkov_2013_2026.csv` (columna `class_weight="balanced"`
-  soportada nativamente por el constructor en sklearn 1.9.1, no hizo falta
-  `sample_weight` manual), extrae los umbrales reales de los nodos, y
-  construye la tabla evaluando `predict_proba` una sola vez por combinación
-  de bin (vectorizado con `np.meshgrid`, no en Python puro -- eso corre en
-  calibración, nunca en el camino caliente).
-- `src/ejecutor_arboles.py` — `EjecutorArboles`, capa rápida: solo
-  `bisect_left` + indexación de tabla plana (sin recorrer árboles, sin
-  diccionarios de nodos), reusa `EstadoRecursivoGlobal` y
-  `EstadoRecursivoPorCuenta`.
-- `src/puente_arboles.py` / `src/ciclo_arboles.py` — escritura atómica y
-  único punto de entrada sancionado, mismas garantías que Dominio 1
-  (artefacto siempre por el Puente, resultado siempre por `veto.py`,
-  cualquier excepción del Ejecutor escala a revisión manual). `veto.py`
-  espera la clave `Amount` (contrato de Dominio 1) -- `CicloDecisionArboles`
-  agrega un alias de `amt` al llamar a `evaluar_veto`, sin modificar
+- `src/calibrador_arboles.py` — trains a `HistGradientBoostingClassifier`
+  on `data/raw/sparkov_2013_2026.csv` (`class_weight="balanced"` is
+  natively supported by the constructor in sklearn 1.9.1, no manual
+  `sample_weight` needed), extracts the nodes' real thresholds, and builds
+  the table by evaluating `predict_proba` once per bin combination
+  (vectorized with `np.meshgrid`, not pure Python — that runs during
+  calibration, never on the hot path).
+- `src/ejecutor_arboles.py` — `EjecutorArboles`, the fast layer: only
+  `bisect_left` + flat-table indexing (no tree walking, no node
+  dictionaries), reuses `EstadoRecursivoGlobal` and `EstadoRecursivoPorCuenta`.
+- `src/puente_arboles.py` / `src/ciclo_arboles.py` — atomic writes and the
+  single sanctioned entry point, same guarantees as Domain 1 (the artifact
+  always goes through the Bridge, the result always goes through
+  `veto.py`, any Executor exception escalates to manual review). `veto.py`
+  expects the `Amount` key (Domain 1's contract) -- `CicloDecisionArboles`
+  adds an `amt` alias when calling `evaluar_veto`, without modifying
   `veto.py`.
 
-**Cifras reales reproducidas** (split temporal 60/20/20 sobre las 1,170,945
-filas, `random_state=42`):
+**Real reproduced figures** (60/20/20 temporal split over the 1,170,945
+rows, `random_state=42`):
 
 | | VAL | TEST |
 |---|---|---|
-| n | 234,189 | 234,189 (200 fraudes reales) |
-| Precisión | 88.7% | 87.8% |
+| n | 234,189 | 234,189 (200 real frauds) |
+| Precision | 88.7% | 87.8% |
 | Recall | 81.8% | 83.0% |
 | F1 | 0.851 | 0.853 |
 | AUC-ROC | 0.9999 | 0.9999 |
 | AUC-PR | 0.898 | 0.901 |
 
-**Umbrales reales extraídos de los 175 árboles** (definen los bins de la
-tabla): `amt` 42, `hora` 13, `conteo_ventana_global` 1, `monto_ewma_cuenta`
-27, `huella_categoria_cuenta` 15 → tabla de `43×14×2×28×16 = 539,392`
-combinaciones (vs. las 692,550 de la sección 6 -- ese número salió del
-modelo previo a la búsqueda de hiperparámetros del Paso 4, con
-`max_depth=6`; el modelo final `max_depth=3` genera árboles más simples con
-menos cortes únicos por feature, tabla más chica, mismo principio).
+**Real thresholds extracted from the 175 trees** (defining the table's
+bins): `amt` 42, `hora` 13, `conteo_ventana_global` 1, `monto_ewma_cuenta`
+27, `huella_categoria_cuenta` 15 → a table of `43×14×2×28×16 = 539,392`
+combinations (vs. section 6's 692,550 -- that number came from the model
+prior to Step 4's hyperparameter search, with `max_depth=6`; the final
+`max_depth=3` model generates simpler trees with fewer unique cuts per
+feature, a smaller table, same principle).
 
-**Exactitud bit a bit, verificada sobre las 234,189 filas completas de TEST**
-(replay desde el inicio de TODO el historial -- train+val+test en orden, no
-solo el tramo de test, para que el estado recursivo por cuenta/global
-arranque igual que en producción real, no vacío en un corte arbitrario):
-MAE = 1.94×10⁻²³, diferencia máxima = 3.47×10⁻¹⁸, correlación = 1.000000 —
-bit-perfecto contra `predict_proba()` + calibración isotónica real,
-replicando el resultado de la sección 6.
+**Bit-for-bit accuracy, verified over the full 234,189 rows of TEST**
+(replayed from the very start of the ENTIRE history -- train+val+test in
+order, not just the test slice, so the per-account/global recursive state
+starts the same way it would in real production, not empty at an arbitrary
+cut point): MAE = 1.94×10⁻²³, maximum difference = 3.47×10⁻¹⁸,
+correlation = 1.000000 — bit-perfect against real `predict_proba()` +
+isotonic calibration, replicating section 6's result.
 
-**Latencia real medida** (`time.perf_counter()`, metodología de
-`scripts/validacion_end_to_end.py`, 1,170,945 decisiones): **9.84
-µs/decisión** para `EjecutorArboles.decidir()` completo (tabla + ambos
-estados recursivos, global y por cuenta) — comparable al Ejecutor de
-Dominio 1 (8.33 µs). Aislando solo la tabla de búsqueda (sin mantenimiento
-de estado, misma metodología que la sección 6): **3.51 µs/decisión**. Ambos
-números son **más altos que los 1.53 µs reportados en la sección 6** — esa
-cifra medía solo la aritmética de la tabla con features ya calculadas, sin
-el costo real de mantener `EstadoRecursivoPorCuenta` (una `deque` de 20
-categorías + un diccionario por cuenta) ni de `hora_utc()`
-(`datetime.fromtimestamp` por decisión). El número honesto y comparable
-contra Dominio 1 es el de camino completo: **9.84 µs**, no 1.53 µs — sigue
-siendo ~5,000x más rápido que una ventana de autorización típica de redes
-de tarjetas, no es un bloqueante real.
+**Real measured latency** (`time.perf_counter()`, the same methodology as
+`scripts/validacion_end_to_end.py`, 1,170,945 decisions): **9.84
+µs/decision** for the full `EjecutorArboles.decidir()` (table + both
+recursive states, global and per account) — comparable to Domain 1's
+Executor (8.33 µs). Isolating just the lookup table (no state maintenance,
+same methodology as section 6): **3.51 µs/decision**. Both numbers are
+**higher than the 1.53 µs reported in section 6** — that figure measured
+only the table's arithmetic with features already computed, without the
+real cost of maintaining `EstadoRecursivoPorCuenta` (a `deque` of 20
+categories + a per-account dictionary) or of `hora_utc()`
+(`datetime.fromtimestamp` per decision). The honest number comparable
+against Domain 1 is the full-path one: **9.84 µs**, not 1.53 µs — still
+~5,000x faster than a typical card-network authorization window, not a
+real blocker.
 
-**Desviación honesta de las cifras del afinamiento:** el AUC-PR real
-(0.898/0.901 val/test) queda por debajo del 0.966±0.013 reportado en el
-Paso 4 del afinamiento (promedio de 5 folds *walk-forward* con ventana
-expansiva) y de los puntos 0.973/0.961 del Paso 5. Explicación más probable,
-no verificada exhaustivamente: aquí se usa un único split fijo 60/20/20
-(mayor varianza que un promedio de 5 folds), más diferencias menores de
-reimplementación (regla exacta de respaldo poblacional bajo
-`min_historial=5`, `random_state=42`, versión de sklearn). El número sigue
-muy por encima del benchmark publicado (AUC-PR 0.51-0.66) y es del mismo
-orden que los resultados originales pre-afinamiento de la sección 5 — no se
-investigó más a fondo (ej. correr el mismo 5-fold walk-forward sobre esta
-implementación) porque no formaba parte del alcance de esta tarea.
+**Honest deviation from the tuning figures:** the real AUC-PR
+(0.898/0.901 val/test) comes in below the 0.966±0.013 reported in tuning
+Step 4 (average of 5 *walk-forward* folds with an expanding window) and the
+0.973/0.961 points from Step 5. Most likely explanation, not exhaustively
+verified: here a single fixed 60/20/20 split is used (higher variance than
+a 5-fold average), plus minor reimplementation differences (the exact
+population-fallback rule under `min_historial=5`, `random_state=42`,
+sklearn version). It wasn't investigated further (e.g. running the same
+5-fold walk-forward on this implementation) because that was outside this
+task's scope — no deeper investigation was done because it wasn't part of
+this task's scope.
 
-**132 tests de Dominio 1 siguen en verde, sin modificar ningún archivo
-existente.** 50 tests nuevos (`tests/test_features_recursivas_cuenta.py`,
+**Domain 1's 132 tests remain green, with no existing file modified.**
+50 new tests (`tests/test_features_recursivas_cuenta.py`,
 `tests/test_artefacto_arboles.py`, `tests/test_puente_arboles.py`,
 `tests/test_ciclo_arboles.py`, `tests/test_calibrador_arboles.py`,
-`tests/test_ejecutor_arboles.py`) — suite completa: **182 tests, todos en
-verde**. Incluyen el test bit-exacto de arriba (con skip automático si
-`data/raw/sparkov_2013_2026.csv` no está presente) y una versión rápida
-equivalente sobre un dataset sintético pequeño para no depender del CSV real
-de 119MB en cada corrida.
+`tests/test_ejecutor_arboles.py`) — full suite: **182 tests, all green**.
+This includes the bit-exact test above (automatically skipped if
+`data/raw/sparkov_2013_2026.csv` isn't present) and an equivalent fast
+version over a small synthetic dataset so runs don't depend on the real
+119MB CSV every time.
 
-**Dos hallazgos reales de la auditoría en el camino, corregidos antes de
-cerrar:**
-1. `artefacto_arboles._es_numero` rechazaba `NaN` en la validación de forma
-   -- inconsistente con `artefacto.py` de Dominio 1 (que sí acepta NaN ahí,
-   dejando la protección real a `veto.py`). Corregido para que el contrato
-   sea el mismo en ambos dominios.
-2. `_interpolar_isotonica` (la interpolación lineal pura de la calibración)
-   reventaba con `IndexError` ante un score de entrada `NaN` -- `bisect` no
-   sabe comparar NaN, y ni `x <= xs[0]` ni `x >= xs[-1]` son verdaderos para
-   NaN, así que caía al camino de interpolación normal y se salía del
-   arreglo. Corregido con un chequeo explícito al inicio (`math.isnan`) que
-   devuelve NaN limpio, igual que `Ejecutor._sigmoide` de Dominio 1
-   (`math.exp(nan)` no lanza). Encontrado por un test que construía a
-   propósito un artefacto con `NaN` en la tabla.
+**Two real audit findings along the way, fixed before closing:**
+1. `artefacto_arboles._es_numero` rejected `NaN` during shape validation
+   -- inconsistent with Domain 1's `artefacto.py` (which does accept NaN
+   there, leaving the real protection to `veto.py`). Fixed so the contract
+   is the same across both domains.
+2. `_interpolar_isotonica` (the calibration's pure linear interpolation)
+   crashed with an `IndexError` on a `NaN` input score -- `bisect` can't
+   compare NaN, and neither `x <= xs[0]` nor `x >= xs[-1]` is true for NaN,
+   so it fell through to the normal interpolation path and ran off the
+   array. Fixed with an explicit check up front (`math.isnan`) that returns
+   a clean NaN, same as Domain 1's `Ejecutor._sigmoide`
+   (`math.exp(nan)` doesn't raise). Found by a test that deliberately built
+   an artifact with `NaN` in the table.
 
-**No se tocó ningún ADR existente** (son de Dominio 1, siguen vigentes tal
-cual). **No se hizo commit ni deploy de nada al momento de escribir esta
-sección** -- ver sección 14 para el cierre de la investigación de la brecha
-de AUC-PR, y `docs/CAMINO3_GENERALIZACION_IOT.md` para el cierre de Camino 3
-(dominio IoT), que se completó después de esta sección.
+**No existing ADR was touched** (they belong to Domain 1, still valid as
+written). **No commit or deploy was made at the time this section was
+written** -- see section 14 for the close-out of the AUC-PR gap
+investigation, and `docs/CAMINO3_GENERALIZACION_IOT.md` for Path 3's
+close-out (the IoT domain), completed after this section.
 
-## 14. Investigación de la brecha AUC-PR — causa raíz encontrada: dependencia de historial por cuenta (2026-09-14)
+## 14. AUC-PR gap investigation — root cause found: per-account history dependency (2026-09-14)
 
-La sección 13 dejó sin investigar por qué el AUC-PR real de producción
-(0.898/0.901) queda por debajo del 0.966±0.013 del Paso 4 del afinamiento.
-Se retomó y se descartaron 4 hipótesis con evidencia directa, hasta
-encontrar una explicación real (no solo "probablemente varianza").
+Section 13 left uninvestigated why production's real AUC-PR (0.898/0.901)
+comes in below tuning Step 4's 0.966±0.013. This was revisited, and 4
+hypotheses were ruled out with direct evidence until a real explanation
+was found (not just "probably variance").
 
-**Primero, se confirmó que la brecha es real, no varianza de un split
-único:** corriendo el mismo walk-forward de 5 folds (`frac_train_inicial=0.5`,
-igual que `validacion_cruzada.py`) sobre el código de producción
-(`src/calibrador_arboles.py`): AUC-PR por fold 0.877, 0.879, 0.931, 0.935,
-0.947 → **media 0.914 ± 0.030**. El split único (0.898/0.901) está en línea
-con este promedio, no es un caso raro.
+**First, the gap was confirmed to be real, not single-split variance:**
+running the same 5-fold walk-forward (`frac_train_inicial=0.5`, same as
+`validacion_cruzada.py`) over the production code
+(`src/calibrador_arboles.py`): AUC-PR per fold 0.877, 0.879, 0.931, 0.935,
+0.947 → **mean 0.914 ± 0.030**. The single split (0.898/0.901) is in line
+with this average, not a rare case.
 
-**4 hipótesis probadas y descartadas, con evidencia directa:**
+**4 hypotheses tested and ruled out, with direct evidence:**
 
-1. **Calibración isotónica** (el código de producción siempre la aplica antes
-   de medir AUC-PR; el Paso 4 del doc, anterior al Paso 5 de calibración,
-   probablemente medía sobre scores crudos) — medido directamente: la
-   diferencia crudo vs. calibrado es de solo ±0.003-0.005 por fold. No
-   explica la brecha de ~0.05.
-2. **`class_weight="balanced"` vs. `sample_weight` manual** (el doc habla de
-   "balancear con sample_weight", el código de producción usa el parámetro
-   del constructor) — probado en 2 folds: dan resultados **idénticos**
-   (0.8814 y 0.9505 en ambos casos). Sin balanceo, cae a 0.82/0.79 —
-   confirma que el balanceo es necesario y ya está bien aplicado, pero no es
-   la causa de la brecha.
-3. **Fuga de datos en `frecuencia_poblacional_categoria`** (¿el script
-   exploratorio la habrá calculado sobre el dataset completo en vez de solo
-   TRAIN?) — probado deliberadamente con fuga: el resultado con fuga es
-   **igual o levemente peor**, no mejor. Descartada.
-4. **Bug en el cálculo de `huella_categoria_cuenta`** — verificado contra la
-   cifra exacta que el propio doc ya había reportado en la sección 6
-   (tercera ronda): 40 valores únicos, 97.7% de las filas en exactamente
-   1.0. El código de producción reproduce **exactamente** esos números,
-   además de filas totales (1,170,945), fraudes totales (907) y cuentas
-   (99) idénticos al resto del documento. La feature más importante del
-   modelo está bien calculada.
+1. **Isotonic calibration** (production code always applies it before
+   measuring AUC-PR; the doc's Step 4, before Step 5's calibration,
+   probably measured raw scores) — measured directly: the raw vs.
+   calibrated difference is only ±0.003-0.005 per fold. Doesn't explain
+   the ~0.05 gap.
+2. **`class_weight="balanced"` vs. manual `sample_weight`** (the doc talks
+   about "balancing with sample_weight," production code uses the
+   constructor parameter) — tested on 2 folds: they give **identical**
+   results (0.8814 and 0.9505 in both cases). Without balancing, it drops
+   to 0.82/0.79 — confirms balancing is necessary and already correctly
+   applied, but isn't the cause of the gap.
+3. **Data leakage in `frecuencia_poblacional_categoria`** (was the
+   exploratory script computing it over the full dataset instead of just
+   TRAIN?) — deliberately tested with leakage: the leaked result is
+   **equal to or slightly worse**, not better. Ruled out.
+4. **Bug in `huella_categoria_cuenta`'s calculation** — checked against the
+   exact figure the doc itself had already reported in section 6 (third
+   round): 40 unique values, 97.7% of rows at exactly 1.0. Production code
+   reproduces those numbers **exactly**, along with total rows (1,170,945),
+   total frauds (907), and accounts (99), all identical to the rest of the
+   document. The model's most important feature is correctly computed.
 
-**Causa raíz encontrada — arranque en frío (cold start) por cuenta:**
-variando `frac_train_inicial` (cuánto historial de "calentamiento" tiene
-cada cuenta antes de que arranque el primer fold de validación):
+**Root cause found — per-account cold start:** varying `frac_train_inicial`
+(how much "warm-up" history each account has before the first validation
+fold starts):
 
-| `frac_train_inicial` | AUC-PR por fold | Media | Desviación |
+| `frac_train_inicial` | AUC-PR per fold | Mean | Std dev |
 |---|---|---|---|
-| 0.5 (arranque en frío, cuentas nuevas) | 0.877 – 0.947 | **0.914** | ±0.030 |
+| 0.5 (cold start, new accounts) | 0.877 – 0.947 | **0.914** | ±0.030 |
 | 0.6 | 0.869 – 0.964 | **0.926** | ±0.033 |
-| 0.7 (historial amplio, cuentas establecidas) | 0.919 – 0.991 | **0.940** | ±0.026 |
+| 0.7 (broad history, established accounts) | 0.919 – 0.991 | **0.940** | ±0.026 |
 
-Tendencia **monótona y consistente**: a más historial acumulado por cuenta
-antes de medir, mejor rinde el modelo — coherente con que
-`huella_categoria_cuenta` (la feature de mayor importancia, 0.945) necesita
-historial real de la cuenta para ser informativa; con poco historial, más
-filas caen en el respaldo poblacional (genérico, menos discriminante). No
-cierra el 100% de la brecha contra el 0.966 del doc (probablemente el
-script exploratorio usó un calentamiento aún mayor, o alguna otra diferencia
-metodológica menor no identificada), pero explica la mayor parte de forma
-verificable y con evidencia monótona, no especulativa.
+A **monotonic and consistent** trend: the more accumulated per-account
+history before measuring, the better the model performs — consistent with
+`huella_categoria_cuenta` (the highest-importance feature, 0.945) needing
+real account history to be informative; with little history, more rows
+fall back to the population default (generic, less discriminative). This
+doesn't close 100% of the gap against the doc's 0.966 (probably the
+exploratory script used even more warm-up, or some other minor
+methodological difference not identified), but it explains most of it in
+a verifiable way, with monotonic evidence, not speculation.
 
-**Esto no es un bug — es un prerrequisito operativo real de Dominio 2, que
-hay que comunicar si el enfoque se usa de verdad:**
+**This isn't a bug — it's a real operational prerequisite of Domain 2,
+which needs to be communicated if the approach is actually used:**
 
-- **Cuenta nueva / poco historial:** AUC-PR ≈ 87.7%-94.7% (media 91.4%),
-  precisión 85-95%, recall 82-89% (rango medido en el detalle del split de
-  `frac_train_inicial=0.5`).
-- **Cuenta establecida / historial amplio:** AUC-PR ≈ 91.9%-99.1% (media
+- **New account / little history:** AUC-PR ≈ 87.7%-94.7% (mean 91.4%),
+  precision 85-95%, recall 82-89% (range measured in the
+  `frac_train_inicial=0.5` split's detail).
+- **Established account / broad history:** AUC-PR ≈ 91.9%-99.1% (mean
   94.0%).
 
-La personalización por cuenta mejora con el tiempo a medida que la cuenta
-acumula transacciones — el mismo problema de "arranque en frío" que tiene
-cualquier sistema de personalización (recomendadores, scoring de crédito).
-Una cuenta nueva en producción real arrancaría en el escenario más débil.
+Per-account personalization improves over time as an account accumulates
+transactions — the same "cold start" problem any personalization system
+has (recommenders, credit scoring). A new account in real production would
+start in the weaker scenario.
 
-**Número vigente para reportar de aquí en adelante:** 0.898-0.914 de
-AUC-PR (según el escenario de historial), no 0.966 — ese número del Paso 4
-queda marcado como no reproducido con el código de producción y su origen
-exacto sin confirmar (script exploratorio ya no disponible).
+**Current number to report going forward:** 0.898-0.914 AUC-PR (depending
+on the history scenario), not 0.966 — that Step 4 number is now marked as
+not reproduced with production code, and its exact origin unconfirmed (the
+exploratory script is no longer available).
 
-## 15. Dos refinamientos menores explorados (2026-09-14)
+## 15. Two minor refinements explored (2026-09-14)
 
-Cierra los 2 últimos ítems de "Pendiente explícito". Exploración pura —
-nada de esto se llevó a `src/`. Misma metodología de comparación que la
-sección 14 (walk-forward 5-fold, `frac_train_inicial=0.5`,
+Closes the last 2 items of "Explicitly pending." Pure exploration — none
+of this was brought into `src/`. Same comparison methodology as section 14
+(5-fold walk-forward, `frac_train_inicial=0.5`,
 `HistGradientBoostingClassifier(max_depth=3, learning_rate=0.05,
-max_iter=200, class_weight="balanced", random_state=42)`, isotónica en VAL,
-AUC-PR sobre scores calibrados), contra el mismo baseline de 5 features:
+max_iter=200, class_weight="balanced", random_state=42)`, isotonic fit on
+VAL, AUC-PR on calibrated scores), against the same 5-feature baseline:
 **0.914 ± 0.030** (folds: 0.877, 0.879, 0.931, 0.935, 0.947).
 
-### 15.1 Point-in-time encoding de `category` — resultado positivo
+### 15.1 Point-in-time encoding of `category` — positive result
 
-Se agregó una 6ta feature, `frecuencia_categoria_expandida`: para cada
-fila, `(conteo_categoria_hasta_ahora + 1) / (conteo_total_hasta_ahora +
-n_categorias)` — causal (solo cuenta filas estrictamente anteriores) y
-expandible (se recalcula fila a fila sobre todo el historial, con
-suavizado de Laplace `alpha=1` para no dar valores extremos en las
-primeras apariciones de una categoría).
+A 6th feature was added, `frecuencia_categoria_expandida`: for each row,
+`(conteo_categoria_hasta_ahora + 1) / (conteo_total_hasta_ahora +
+n_categorias)` — causal (only counts strictly earlier rows) and expanding
+(recomputed row by row over the full history, with Laplace smoothing
+`alpha=1` to avoid extreme values on a category's earliest occurrences).
 
-**Verificado explícitamente que NO reproduce la trampa de no-estacionariedad
-de la sección 2** (one-hot fijo + split temporal rompiendo el modelo por
-`personal_care`): la trayectoria real de esta feature para esa categoría
-por año —
+**Explicitly verified that it does NOT reproduce section 2's non-stationarity
+trap** (a fixed one-hot + temporal split breaking the model via
+`personal_care`): this feature's real trajectory for that category, by
+year —
 
-| Año | Transacciones | Valor medio de la feature |
+| Year | Transactions | Feature's mean value |
 |---|---|---|
-| 2013-2023 (11 años) | 1-4 por año | 0.000023 – 0.000090 |
+| 2013-2023 (11 years) | 1-4 per year | 0.000023 – 0.000090 |
 | 2025 | 63,876 | 0.029253 |
 | 2026 | 18,580 | 0.064972 |
 
-— muestra que el valor **se adapta suavemente** al volumen real, sin
-quedar pegado a las ~24 filas tempranas: a diferencia de un one-hot
-estático ajustado una sola vez, acá el peso de esa evidencia vieja se
-diluye solo (por construcción) a medida que crece el denominador total.
-No hay coeficiente fijo aprendiendo una regla espuria de pocas filas.
+— shows the value **adapts smoothly** to the real volume, without staying
+stuck on the ~24 early rows: unlike a static one-hot fit once, here the
+weight of that old evidence dilutes itself (by construction) as the total
+denominator grows. There's no fixed coefficient learning a spurious rule
+from a handful of rows.
 
-**Resultado (6 features vs. 5 baseline):**
+**Result (6 features vs. 5-feature baseline):**
 
-| | AUC-PR por fold | Media | Desviación |
+| | AUC-PR per fold | Mean | Std dev |
 |---|---|---|---|
 | Baseline (5 features) | 0.877, 0.879, 0.931, 0.935, 0.947 | 0.914 | ±0.030 |
 | **+ `frecuencia_categoria_expandida` (6 features)** | 0.907, 0.923, 0.976, 0.958, 0.970 | **0.947** | ±0.027 |
 
-**Mejora real de +0.033 AUC-PR, consistente en los 5 folds** (mejora en
-4 de 5, el fold 0 queda prácticamente igual). No es ruido — la magnitud y
-la consistencia entre folds son mayores que la desviación estándar.
+**A real improvement of +0.033 AUC-PR, consistent across the 5 folds**
+(improved in 4 of 5, fold 0 is practically unchanged). Not noise — the
+magnitude and the consistency across folds exceed the standard deviation.
 
-**Recomendación:** vale la pena llevar esta feature a producción
-(`src/calibrador_arboles.py` + `src/ejecutor_arboles.py`). **Implementado
-2026-09-14, ver sección 16** — AUC-PR real de producción confirmó la
-mejora (0.947±0.027 en 5-fold, reproduciendo casi exacto este hallazgo).
+**Recommendation:** worth bringing this feature to production
+(`src/calibrador_arboles.py` + `src/ejecutor_arboles.py`). **Implemented
+2026-09-14, see section 16** — real production AUC-PR confirmed the
+improvement (0.947±0.027 in 5-fold, reproducing this finding almost
+exactly).
 
-### 15.2 Huella con decaimiento EWMA en vez de ventana fija K=20 — resultado negativo/inconcluso
+### 15.2 Fingerprint with EWMA decay instead of a fixed K=20 window — negative/inconclusive result
 
-Se reemplazó `huella_categoria_cuenta` (ventana causal de las últimas 20
-transacciones de la cuenta) por un histograma de categorías por cuenta con
-decaimiento exponencial: en cada transacción, todos los pesos existentes
-decaen por `lambda`, se suma `(1-lambda)` a la categoría actual, y la
-huella es el peso normalizado de la categoría actual (respaldo poblacional
-igual que hoy para cuentas con <5 transacciones reales, no ponderadas).
+`huella_categoria_cuenta` (a causal window over the account's last 20
+transactions) was replaced with a per-account category histogram with
+exponential decay: on every transaction, all existing weights decay by
+`lambda`, `(1-lambda)` is added to the current category, and the
+fingerprint is the current category's normalized weight (same population
+fallback as today for accounts with <5 real transactions, unweighted).
 
-**Resultado (reemplazando la huella de ventana fija, no agregándola):**
+**Result (replacing the fixed-window fingerprint, not adding to it):**
 
-| Variante | AUC-PR por fold | Media | Desviación |
+| Variant | AUC-PR per fold | Mean | Std dev |
 |---|---|---|---|
-| Baseline (ventana fija K=20) | 0.877, 0.879, 0.931, 0.935, 0.947 | 0.914 | ±0.030 |
-| EWMA λ=0.98 (mismo λ que el resto del proyecto) | 0.857, 0.852, 0.931, 0.904, 0.924 | **0.894** | ±0.033 |
-| EWMA λ=0.9 (decaimiento más rápido) | 0.866, 0.901, 0.950, 0.941, 0.958 | **0.923** | ±0.035 |
+| Baseline (fixed K=20 window) | 0.877, 0.879, 0.931, 0.935, 0.947 | 0.914 | ±0.030 |
+| EWMA λ=0.98 (same λ as the rest of the project) | 0.857, 0.852, 0.931, 0.904, 0.924 | **0.894** | ±0.033 |
+| EWMA λ=0.9 (faster decay) | 0.866, 0.901, 0.950, 0.941, 0.958 | **0.923** | ±0.035 |
 
-**λ=0.98 empeora de forma clara** (-0.020, peor en 4 de 5 folds).
-**λ=0.9 mejora levemente** (+0.009), pero la desviación estándar (±0.033-0.035)
-es mayor que la diferencia — no hay evidencia sólida de que sea una mejora
-real y no ruido de muestreo.
+**λ=0.98 clearly gets worse** (-0.020, worse in 4 of 5 folds). **λ=0.9
+improves slightly** (+0.009), but the standard deviation (±0.033-0.035)
+exceeds the difference — no solid evidence that it's a real improvement
+and not sampling noise.
 
-**Veredicto honesto: no hay caso claro para reemplazar la ventana fija de
-20 transacciones.** La ventana fija (que "olvida" del todo después de 20
-transacciones) parece capturar mejor "comportamiento reciente típico" que
-un decaimiento suave que nunca olvida del todo — posiblemente porque el
-comportamiento de cuenta en Sparkov no tiene una deriva gradual que el
-decaimiento aproveche, similar en espíritu al hallazgo de Camino 3 (el
-suavizado EWMA tampoco ayudó ahí, por la misma razón: no toda señal se
-beneficia de memoria larga).
+**Honest verdict: no clear case for replacing the fixed 20-transaction
+window.** The fixed window (which "forgets" entirely after 20 transactions)
+seems to capture "typical recent behavior" better than a smooth decay that
+never fully forgets — possibly because per-account behavior in Sparkov
+doesn't have a gradual drift that decay can exploit, similar in spirit to
+Path 3's finding (EWMA smoothing didn't help there either, for the same
+reason: not every signal benefits from long memory).
 
-**Recomendación:** no llevar este cambio a producción — la versión actual
-(ventana fija K=20) se mantiene como la mejor opción validada.
+**Recommendation:** don't bring this change to production — the current
+version (fixed K=20 window) stays as the best validated option.
 
-## 16. `frecuencia_categoria_expandida` llevada a producción (2026-09-14)
+## 16. `frecuencia_categoria_expandida` brought to production (2026-09-14)
 
-Cierra la recomendación de la sección 15.1: la 6ta feature (point-in-time
-encoding causal de `category`, Laplace `alpha=1`) ya está en `src/`, no solo
-en exploración.
+Closes section 15.1's recommendation: the 6th feature (causal point-in-time
+encoding of `category`, Laplace `alpha=1`) is now in `src/`, not just in
+exploration.
 
-**Archivos modificados:**
-- `src/features_recursivas_cuenta.py` — nueva función batch
+**Modified files:**
+- `src/features_recursivas_cuenta.py` — a new batch function
   `calcular_frecuencia_categoria_expandida_batch(df, n_categorias)`
-  (vectorizada: `groupby("category").cumcount()` para el conteo causal por
-  categoría + `np.arange` para el total, sin loop) y nueva clase de estado
-  incremental `EstadoFrecuenciaCategoriaGlobal` (global, no por cuenta —
-  vive en este módulo por cohesión con `calcular_frecuencia_poblacional_categoria`,
-  no porque sea "por cuenta"). `n_categorias` se deriva de
-  `len(frecuencia_poblacional_categoria)` (vocabulario de TRAIN) en vez de
-  agregar un campo nuevo al artefacto.
-- `src/calibrador_arboles.py` — `FEATURES_ARBOLES` pasa de 5 a 6 entradas;
-  `construir_features()` agrega la feature nueva.
-- `src/ejecutor_arboles.py` — `EjecutorArboles` mantiene
-  `EstadoFrecuenciaCategoriaGlobal` junto a los otros dos estados
-  recursivos, alimentando la 6ta dimensión de la tabla de búsqueda.
-- `src/artefacto_arboles.py` — **sin cambios de esquema**: `features` ya
-  era una lista genérica, y `n_categorias` se reutiliza de
-  `frecuencia_poblacional_categoria` en vez de un campo nuevo.
-- Tests nuevos: 3 en `tests/test_features_recursivas_cuenta.py` (caso a
-  mano, estado incremental aislado, paridad batch/incremental sobre
-  secuencia aleatoria) + 1 en `tests/test_ejecutor_arboles.py` (confirma
-  que la feature nueva participa de verdad en la tabla de búsqueda, con un
-  artefacto sintético de 6 features).
+  (vectorized: `groupby("category").cumcount()` for the causal per-category
+  count + `np.arange` for the total, no loop) and a new incremental-state
+  class `EstadoFrecuenciaCategoriaGlobal` (global, not per account — it
+  lives in this module for cohesion with
+  `calcular_frecuencia_poblacional_categoria`, not because it's
+  "per account"). `n_categorias` is derived from
+  `len(frecuencia_poblacional_categoria)` (TRAIN's vocabulary) instead of
+  adding a new field to the artifact.
+- `src/calibrador_arboles.py` — `FEATURES_ARBOLES` goes from 5 to 6
+  entries; `construir_features()` adds the new feature.
+- `src/ejecutor_arboles.py` — `EjecutorArboles` maintains
+  `EstadoFrecuenciaCategoriaGlobal` alongside the other two recursive
+  states, feeding the table's 6th dimension.
+- `src/artefacto_arboles.py` — **no schema change**: `features` was
+  already a generic list, and `n_categorias` is reused from
+  `frecuencia_poblacional_categoria` instead of a new field.
+- New tests: 3 in `tests/test_features_recursivas_cuenta.py` (a hand-worked
+  case, isolated incremental state, batch/incremental parity over a random
+  sequence) + 1 in `tests/test_ejecutor_arboles.py` (confirms the new
+  feature genuinely participates in the lookup table, with a synthetic
+  6-feature artifact).
 
-**Cifras reales reproducidas** (código de producción, no el script
-exploratorio):
+**Real reproduced figures** (production code, not the exploratory script):
 
-| Metodología | AUC-PR | Comparar contra (5 features) |
+| Methodology | AUC-PR | Compare against (5 features) |
 |---|---|---|
 | 5-fold walk-forward (`frac_train_inicial=0.5`) | **0.947 ± 0.027** | 0.914 ± 0.030 |
-| Split único 60/20/20, VAL | 0.932 | 0.898 |
-| Split único 60/20/20, TEST | 0.925 | 0.901 |
+| Single 60/20/20 split, VAL | 0.932 | 0.898 |
+| Single 60/20/20 split, TEST | 0.925 | 0.901 |
 
-El 5-fold reproduce casi exacto lo que había medido la exploración de la
-sección 15.1 (0.947±0.027) — confirma que el hallazgo no era un artefacto
-del script exploratorio. El split único también mejora de forma
-consistente con la 6ta feature (no solo el 5-fold), aunque sigue
-reflejando la dependencia de historial/arranque en frío ya documentada en
-la sección 14 (0.925-0.932 vs. 0.947 del 5-fold, mismo patrón que antes).
+The 5-fold almost exactly reproduces what section 15.1's exploration had
+measured (0.947±0.027) — confirms the finding wasn't an artifact of the
+exploratory script. The single split also improves consistently with the
+6th feature (not just the 5-fold), though it still reflects the
+history/cold-start dependency already documented in section 14
+(0.925-0.932 vs. the 5-fold's 0.947, same pattern as before).
 
-**Tabla de búsqueda:** pasa de `[43, 14, 2, 28, 16]` (539,392 combinaciones,
-5 features) a `[42, 11, 2, 26, 16, 29]` (**11,147,136 combinaciones**, 6
-features) — crece ~20x por la dimensión nueva (29 umbrales únicos de
-`frecuencia_categoria_expandida` aprendidos por los árboles). Sigue siendo
-exacta por construcción (mismo mecanismo `bisect_left`), verificado con el
-test bit-exacto real: diferencia máxima < 1×10⁻⁹ sobre las 234,189 filas
-completas de TEST.
+**Lookup table:** goes from `[43, 14, 2, 28, 16]` (539,392 combinations,
+5 features) to `[42, 11, 2, 26, 16, 29]` (**11,147,136 combinations**, 6
+features) — grows ~20x from the new dimension (29 unique thresholds the
+trees learned for `frecuencia_categoria_expandida`). Still exact by
+construction (same `bisect_left` mechanism), verified with the real
+bit-exact test: maximum difference < 1×10⁻⁹ over the full 234,189 rows of
+TEST.
 
-**Latencia real medida:** **10.90 µs/decisión** (1,170,945 decisiones,
-`time.perf_counter()`) — sube desde los 9.84 µs de 5 features (una lectura
-más de estado + una dimensión más en la tabla), sigue en el mismo orden que
-Dominio 1 y muy por debajo del presupuesto de industria.
+**Real measured latency:** **10.90 µs/decision** (1,170,945 decisions,
+`time.perf_counter()`) — up from the 5-feature 9.84 µs (one more state
+read + one more table dimension), still the same order of magnitude as
+Domain 1 and far below industry budget.
 
-**Tests: 186 en total, todos en verde** (182 anteriores + 4 nuevos; ninguno
-de los 182 tests existentes se modificó para lograrlo — la generalidad de
-`FEATURES_ARBOLES` como lista y de `features`/`umbrales_por_feature` en el
-artefacto absorbió el cambio de 5 a 6 dimensiones sin romper nada).
+**Tests: 186 total, all green** (182 prior + 4 new; none of the 182
+existing tests were modified to make this work — the generality of
+`FEATURES_ARBOLES` as a list, and of `features`/`umbrales_por_feature` in
+the artifact, absorbed the change from 5 to 6 dimensions without breaking
+anything).
 
-**No se tocó Dominio 1.** No se hizo commit ni deploy — queda a decisión
-del usuario. SYNAPSE sigue en fase de pruebas.
+**Domain 1 was not touched.** No commit or deploy was made — left to the
+user's decision. SYNAPSE is still in testing phase.
 
-**Actualización (2026-09-14, después de la sección 21):** `LEARNING_RATE`
-cambió de `0.05` a `0.1` en `src/calibrador_arboles.py`, implementando la
-recomendación de la sección 21. Reentrenado y reverificado bit a bit
-(19 tests de Dominio 2 + 186 totales, todos en verde). Cifras reales
-actualizadas del split único 60/20/20:
+**Update (2026-09-14, after section 21):** `LEARNING_RATE` changed from
+`0.05` to `0.1` in `src/calibrador_arboles.py`, implementing section 21's
+recommendation. Retrained and re-verified bit for bit (19 Domain 2 tests +
+186 total, all green). Updated real figures from the single 60/20/20
+split:
 
-| | VAL (antes / ahora) | TEST (antes / ahora) |
+| | VAL (before / after) | TEST (before / after) |
 |---|---|---|
-| Precisión | 88.7% / **94.3%** | 87.8% / **90.3%** |
+| Precision | 88.7% / **94.3%** | 87.8% / **90.3%** |
 | Recall | 81.8% / 85.7% | 83.0% / 84.0% |
 | F1 | 0.851 / 0.898 | 0.853 / 0.871 |
 | AUC-PR | 0.898 / **0.951** | 0.901 / **0.926** |
 
-Mejora consistente en las dos métricas y los dos splits, no solo en el
-5-fold de la sección 21. Tabla de búsqueda: 11,147,136 → **16,189,440**
-combinaciones (`[39, 11, 2, 31, 16, 30]` umbrales por feature, más grande
-por los umbrales nuevos que aprenden los árboles con `learning_rate=0.1`)
-— sigue exacta por construcción, verificado de nuevo bit a bit. La primera
-corrida de esta actualización se hizo directamente (no vía subagente) por
-límite semanal de cuota de API alcanzado durante la sesión.
+Consistent improvement across both metrics and both splits, not just in
+section 21's 5-fold. Lookup table: 11,147,136 → **16,189,440**
+combinations (`[39, 11, 2, 31, 16, 30]` thresholds per feature, larger due
+to the new thresholds the trees learn with `learning_rate=0.1`) — still
+exact by construction, re-verified bit for bit. This update's first run
+was done directly (not via a subagent) due to a weekly API quota limit
+reached during the session.
 
-## 17. Ablation: ¿hay redundancia entre las 2 features de categoría? (2026-09-14)
+## 17. Ablation: is there redundancy between the 2 category features? (2026-09-14)
 
-Pregunta directa tras llevar `frecuencia_categoria_expandida` (global) a
-producción junto a `huella_categoria_cuenta` (por cuenta, ya existente):
-¿se pisan entre sí, o aportan señal genuinamente distinta? Ablation de 4
-sets de features, misma metodología de comparación que las secciones
-14-16 (walk-forward 5-fold, `frac_train_inicial=0.5`, configuración ganadora
-del Paso 4, isotónica en VAL, AUC-PR sobre scores calibrados):
+A direct question after bringing `frecuencia_categoria_expandida` (global)
+to production alongside `huella_categoria_cuenta` (per account, already
+existing): do they overlap with each other, or do they contribute
+genuinely distinct signal? A 4-set ablation, same comparison methodology
+as sections 14-16 (5-fold walk-forward, `frac_train_inicial=0.5`, the
+Step 4 winning configuration, isotonic fit on VAL, AUC-PR on calibrated
+scores):
 
-| Set | AUC-PR por fold | Media | Desviación |
+| Set | AUC-PR per fold | Mean | Std dev |
 |---|---|---|---|
-| **6 features (baseline producción)** | 0.907, 0.923, 0.976, 0.958, 0.970 | **0.947** | ±0.027 |
-| Sin `huella_categoria_cuenta` (5, solo la global) | 0.438, 0.332, 0.395, 0.454, 0.606 | **0.445** | ±0.091 |
-| Sin `frecuencia_categoria_expandida` (5, versión anterior) | 0.877, 0.879, 0.931, 0.935, 0.947 | **0.914** | ±0.030 |
-| Solo `amt` + las 2 de categoría (3) | 0.833, 0.857, 0.838, 0.827, 0.895 | **0.850** | ±0.025 |
+| **6 features (production baseline)** | 0.907, 0.923, 0.976, 0.958, 0.970 | **0.947** | ±0.027 |
+| Without `huella_categoria_cuenta` (5, only the global one) | 0.438, 0.332, 0.395, 0.454, 0.606 | **0.445** | ±0.091 |
+| Without `frecuencia_categoria_expandida` (5, the earlier version) | 0.877, 0.879, 0.931, 0.935, 0.947 | **0.914** | ±0.030 |
+| Only `amt` + the 2 category features (3) | 0.833, 0.857, 0.838, 0.827, 0.895 | **0.850** | ±0.025 |
 
-**Veredicto honesto: NO hay redundancia — al contrario, las dos features
-de categoría son asimétricamente importantes, y ambas aportan señal real.**
+**Honest verdict: NO redundancy — on the contrary, the two category
+features are asymmetrically important, and both contribute real signal.**
 
-- **Quitar `huella_categoria_cuenta` es catastrófico**: el modelo se
-  derrumba de 0.947 a **0.445** (más que a la mitad) y la desviación entre
-  folds se triplica (±0.091) — es, por lejos, la feature que más carga el
-  modelo, consistente con la importancia de permutación ya medida en la
-  sección 7 (0.945, la más alta de todas).
-- **Quitar `frecuencia_categoria_expandida` cuesta mucho menos**: cae de
-  0.947 a 0.914 (-0.033) — real, pero no comparable en magnitud a quitar la
-  huella. Es un complemento genuino, no decorativo, pero no es la columna
-  vertebral del modelo.
-- **Las otras 3 features (`hora`, `conteo_ventana_global`,
-  `monto_ewma_cuenta`) también aportan de forma real**: con solo `amt` +
-  las 2 de categoría (3 features), el modelo cae a 0.850 — 0.097 por debajo
-  del set completo. No son prescindibles pese a tener importancia
-  individual modesta (mismo patrón ya visto en el ablation de la sección 7:
-  "Set C" con solo 2 features caía de forma parecida).
+- **Removing `huella_categoria_cuenta` is catastrophic**: the model
+  collapses from 0.947 to **0.445** (more than half) and the spread
+  across folds triples (±0.091) — by far the feature carrying the most
+  weight in the model, consistent with the permutation importance already
+  measured in section 7 (0.945, the highest of all).
+- **Removing `frecuencia_categoria_expandida` costs much less**: drops
+  from 0.947 to 0.914 (-0.033) — real, but not comparable in magnitude to
+  removing the fingerprint. It's a genuine complement, not decorative, but
+  it isn't the model's backbone.
+- **The other 3 features (`hora`, `conteo_ventana_global`,
+  `monto_ewma_cuenta`) also contribute for real**: with only `amt` + the 2
+  category features (3 features), the model drops to 0.850 — 0.097 below
+  the full set. Not dispensable despite modest individual importance
+  (same pattern already seen in section 7's ablation: "Set C" with only 2
+  features dropped similarly).
 
-**Conclusión:** las 6 features de producción se quedan como están — cada
-una aporta señal real y verificada, ninguna es redundante con otra al
-punto de justificar sacarla. `huella_categoria_cuenta` es, con mucha
-diferencia, la feature más crítica de todo Dominio 2.
+**Conclusion:** the 6 production features stay as they are — each
+contributes real, verified signal, none is redundant enough with another
+to justify dropping it. `huella_categoria_cuenta` is, by a wide margin,
+Domain 2's single most critical feature.
 
-## 18. Columnas demográficas nunca probadas — no disponibles, no un resultado negativo real
+## 18. Demographic columns never tested — unavailable, not a real negative result
 
-Pendiente #2 de la lista de pruebas adicionales: probar edad/género/ocupación/
-ciudad del cliente como features nuevas, candidatas típicas del generador
-`Sparkov_Data_Generation` que nunca se usaron en el modelo.
+Pending item #2 from the additional-tests list: test customer
+age/gender/occupation/city as new features, typical candidates from the
+`Sparkov_Data_Generation` generator that were never used in the model.
 
-**Hallazgo real antes de poder probar nada:** `data/raw/sparkov_2013_2026.csv`
-**no tiene esas columnas**. Sus 11 columnas reales son: `cc_num`, `lat`,
+**Real finding before anything could be tested:** `data/raw/sparkov_2013_2026.csv`
+**doesn't have those columns**. Its 11 real columns are: `cc_num`, `lat`,
 `long`, `trans_date`, `trans_time`, `unix_time`, `category`, `amt`,
-`is_fraud`, `merch_lat`, `merch_long` — verificado leyendo el CSV
-directamente, no supuesto. La sección 1 del doc ya lo explicaba: el dataset
-fue "combinado y reducido a las columnas útiles (61 archivos crudos → 1
-CSV)" — género, fecha de nacimiento, ocupación y ciudad/estado se
-descartaron en ese paso de combinación, nunca llegaron al CSV que usa el
-proyecto.
+`is_fraud`, `merch_lat`, `merch_long` — verified by reading the CSV
+directly, not assumed. Section 1 of this doc already explained it: the
+dataset was "combined and reduced to the useful columns (61 raw files → 1
+CSV)" — gender, date of birth, occupation, and city/state were dropped in
+that combination step, never made it into the CSV the project uses.
 
-**Se buscó si quedaba algún archivo de generación original con esos datos**
-(`/tmp/sparkov_gen`, la instalación del generador usada en su momento):
-existen `datagen_customer.py`, `profiles/` (perfiles demográficos genéricos
-del generador, no de las 99 cuentas reales) y `demographics.csv` (tabla de
-referencia poblacional de EE.UU., tampoco específica de las cuentas), pero
-**no hay un `customers.csv` de la corrida real que generó las 99 cuentas**
-de `sparkov_2013_2026.csv` — solo quedó guardado el CSV de transacciones ya
-combinado y reducido. Recuperar esos datos requeriría **regenerar el
-dataset completo desde cero** con `Sparkov_Data_Generation`, el mismo
-obstáculo ya documentado en la sección 10 (un test de solo 2 clientes × 10
-días tardó >13 minutos sin terminar en esta máquina — regenerar 100
-clientes × 13 años no es viable aquí).
+**A search was made for any original generation file that still had that
+data** (`/tmp/sparkov_gen`, the generator install used at the time):
+`datagen_customer.py`, `profiles/` (the generator's generic demographic
+profiles, not the 99 real accounts'), and `demographics.csv` (a U.S.
+population reference table, also not specific to the accounts) exist, but
+**there's no `customers.csv` from the real run that generated the 99
+accounts** in `sparkov_2013_2026.csv` — only the already-combined, already-
+reduced transactions CSV was kept. Recovering that data would require
+**regenerating the entire dataset from scratch** with
+Sparkov_Data_Generation, the same obstacle already documented in section 10
+(a test with just 2 customers × 10 days took >13 minutes without finishing
+on this machine — regenerating 100 customers × 13 years isn't feasible
+here).
 
-**Veredicto honesto: esta prueba queda cerrada por falta de datos, no por
-un resultado negativo del modelo.** No es "se probó y no ayudó" (como la
-sección 15.2) — es "no se pudo probar porque el dato ya no existe en el
-dataset que tenemos". Si en algún momento se regenera Sparkov desde cero
-guardando también el archivo de clientes, esta prueba queda pendiente de
-verdad para retomar. Con los datos actuales, el dataset de transacciones
-está agotado en cuanto a columnas explorables — las 6 features de
-producción son todo lo que da de sí `sparkov_2013_2026.csv` tal como existe
-hoy.
+**Honest verdict: this test is closed for lack of data, not because of a
+negative model result.** This isn't "tried and didn't help" (like section
+15.2) — it's "couldn't be tried because the data no longer exists in the
+dataset we have." If Sparkov is ever regenerated from scratch while also
+saving the customer file, this test is genuinely still pending for later.
+With the current data, the transactions dataset is exhausted in terms of
+explorable columns — the 6 production features are everything
+`sparkov_2013_2026.csv` has to offer as it exists today.
 
-## 19. Detector de deriva (`src/deriva.py`) vs. `frecuencia_categoria_expandida` — dispara demasiado seguido, recomendación real
+## 19. Drift detector (`src/deriva.py`) vs. `frecuencia_categoria_expandida` — fires too often, a real recommendation
 
-`src/deriva.py` (PSI + Kolmogorov-Smirnov, Dominio 1) es genérico —
-`evaluar_deriva()` corre sobre cualquier columna numérica de un DataFrame,
-sin ninguna dependencia real de Dominio 1. Se aplicó tal cual a las 6
-features de producción de Dominio 2. `ponderar_deriva_por_coeficiente()`
-**sí** es específico de Dominio 1 (asume un artefacto con
-`coeficientes`/modelo lineal) — no aplica al artefacto de árboles de
-Dominio 2 sin adaptarlo; **hallazgo aparte, fuera de alcance de esta
-prueba**: no existe todavía un disparador de recalibración automática para
-Dominio 2 (`disparador_recalibracion.py` es exclusivo de Dominio 1).
+`src/deriva.py` (PSI + Kolmogorov-Smirnov, Domain 1) is generic —
+`evaluar_deriva()` runs on any numeric column of a DataFrame, with no real
+dependency on Domain 1. It was applied as-is to Domain 2's 6 production
+features. `ponderar_deriva_por_coeficiente()` **is** specific to Domain 1
+(it assumes an artifact with `coeficientes`/a linear model) — it doesn't
+apply to Domain 2's tree artifact without adapting it; **a separate
+finding, outside this test's scope**: there is no automatic recalibration
+trigger yet for Domain 2 (`disparador_recalibracion.py` is exclusive to
+Domain 1).
 
-**Control positivo — el detector SÍ ve el cambio real y esperado:**
-comparando 2013-2018 (referencia) contra 2024-2026 (actual),
-`frecuencia_categoria_expandida` da **PSI=4.84** (`deriva_significativa_recalibrar`,
-muy por encima del umbral de 0.25) — consistente con el cambio real y ya
-documentado en la sección 15.1 (`personal_care` pasando de ~0.00002 a
-~0.06). El detector funciona: no es ciego al cambio real.
+**Positive control — the detector DOES see the real, expected change:**
+comparing 2013-2018 (reference) against 2024-2026 (current),
+`frecuencia_categoria_expandida` gives **PSI=4.84**
+(`deriva_significativa_recalibrar`, far above the 0.25 threshold) —
+consistent with the real change already documented in section 15.1
+(`personal_care` going from ~0.00002 to ~0.06). The detector works: it
+isn't blind to real change.
 
-**El problema real — dispara casi siempre, no solo cuando importa.**
-Comparando cada año contra el siguiente (13 transiciones válidas,
+**The real problem — it fires almost always, not just when it matters.**
+Comparing each year against the next (13 valid transitions,
 2013→2014 … 2025→2026):
 
-| Feature | Dispara recalibración (PSI>0.25) |
+| Feature | Triggers recalibration (PSI>0.25) |
 |---|---|
 | `amt` | 0/13 (0%) |
 | `hora` | 3/13 (23%) |
@@ -1076,220 +1070,216 @@ Comparando cada año contra el siguiente (13 transiciones válidas,
 | `huella_categoria_cuenta` | 0/13 (0%) |
 | **`frecuencia_categoria_expandida`** | **11/13 (85%)** |
 
-**Recomendación agregada de recalibrar** (con `evaluar_deriva()` completo,
-"recalibrar si CUALQUIER feature dispara"), mismas 13 transiciones
-año-a-año:
+**Aggregate recalibration recommendation** (with the full `evaluar_deriva()`,
+"recalibrate if ANY feature fires"), same 13 year-over-year transitions:
 
-| Set de features | Recomienda recalibrar |
+| Feature set | Recommends recalibrating |
 |---|---|
-| 5 features (sin la nueva) | 3/13 (23%) |
-| **6 features (con la nueva)** | **12/13 (92%)** |
+| 5 features (without the new one) | 3/13 (23%) |
+| **6 features (with the new one)** | **12/13 (92%)** |
 
-Agregar `frecuencia_categoria_expandida` al monitoreo de deriva hace que el
-sistema recomiende recalibrar en **prácticamente todas** las transiciones
-de año — no porque el modelo se esté deteriorando, sino porque esta
-feature, por construcción (frecuencia expandida, Laplace), **siempre** se
-mueve con el tiempo — es su comportamiento normal y esperado, documentado
-desde que se introdujo (sección 15.1), no una anomalía real cada vez que
-ocurre.
+Adding `frecuencia_categoria_expandida` to drift monitoring makes the
+system recommend recalibration in **practically every** year transition —
+not because the model is deteriorating, but because this feature, by
+construction (expanding frequency, Laplace), **always** moves over time —
+that's its normal, expected behavior, documented since it was introduced
+(section 15.1), not a real anomaly every time it happens.
 
-**Veredicto honesto: el comportamiento actual de `deriva.py` con esta
-feature es técnicamente correcto (mide bien el movimiento real) pero
-operativamente ruidoso (recalibraría casi siempre, sin discriminar entre
-"cambio esperado por diseño" y "deterioro real que amerita atención").**
-Recomendación real, no implementada en esta pasada: **excluir
-`frecuencia_categoria_expandida` del set de columnas que se le pasan a
-`evaluar_deriva()`/un futuro disparador de recalibración para Dominio 2**
-(monitorear las otras 5 normalmente) — o, alternativa más elaborada,
-monitorear su *tasa de cambio* relativa a una tendencia esperada en vez de
-su valor crudo, pero eso es ingeniería adicional no trivial, no un ajuste
-de una línea. Dado que no existe todavía un disparador de recalibración
-para Dominio 2 (ver arriba), esto queda anotado para cuando se construya
-uno, no como un bug urgente a corregir hoy.
+**Honest verdict: `deriva.py`'s current behavior with this feature is
+technically correct (it measures the real movement well) but
+operationally noisy (it would recalibrate almost always, without
+distinguishing "change expected by design" from "real deterioration that
+warrants attention").** A real recommendation, not implemented in this
+pass: **exclude `frecuencia_categoria_expandida` from the set of columns
+passed to `evaluar_deriva()`/a future Domain 2 recalibration trigger**
+(monitor the other 5 normally) — or, a more elaborate alternative, monitor
+its *rate of change* relative to an expected trend instead of its raw
+value, but that's additional, non-trivial engineering, not a one-line
+tweak. Since there's no recalibration trigger yet for Domain 2 (see
+above), this is noted for whenever one gets built, not as an urgent bug to
+fix today.
 
-## 20. Prueba adversarial — evasión simple de `huella_categoria_cuenta` (2026-09-14)
+## 20. Adversarial test — simple evasion of `huella_categoria_cuenta` (2026-09-14)
 
-Todo el fraude simulado en Sparkov hasta ahora es "ingenuo": el generador
-inyecta fraude sin preocuparse por imitar el comportamiento normal de la
-cuenta. La pregunta real: ¿qué tan fácil sería evadir la detección para un
-atacante que SÍ conociera el mecanismo de `huella_categoria_cuenta` (la
-feature de mayor importancia, sección 17)?
+All of Sparkov's simulated fraud so far has been "naive": the generator
+injects fraud without bothering to imitate the account's normal behavior.
+The real question: how easy would it be for an attacker who DID know the
+`huella_categoria_cuenta` mechanism (the highest-importance feature,
+section 17) to evade detection?
 
-**Ataque simulado (el más simple y barato posible):** para cada una de las
-200 transacciones fraudulentas reales de TEST, reemplazar únicamente su
-`category` por la categoría más frecuente de esa cuenta en su ventana
-causal de las últimas 20 transacciones (el mismo criterio exacto que usa
-`huella_categoria_cuenta`) — sin tocar monto, momento, ni cuenta. Bajo este
-reemplazo, `huella_categoria_cuenta` se recalcula **exacto** (es el valor
-máximo alcanzable para esa cuenta en ese momento) y
-`frecuencia_categoria_expandida` también se recalcula exacto (contando
-ocurrencias reales previas de la categoría elegida en todo el historial
-global anterior a esa fila). `amt`, `hora`, `conteo_ventana_global` y
-`monto_ewma_cuenta` quedan iguales — el atacante solo controla la
-categoría, no el monto ni el momento (un atacante más agresivo podría
-camuflar también el monto; no se probó en esta pasada). **Limitación
-documentada:** no se repropaga el cambio hacia adelante (transacciones
-posteriores de la misma cuenta que verían esta categoría camuflada en su
-propia ventana) — efecto de segundo orden, ignorado por alcance.
+**Simulated attack (the simplest and cheapest possible):** for each of the
+200 real fraudulent transactions in TEST, replace only its `category` with
+that account's most frequent category within its causal window of the last
+20 transactions (the exact same criterion `huella_categoria_cuenta` uses) —
+without touching amount, timing, or account. Under this substitution,
+`huella_categoria_cuenta` recomputes to **exactly** the maximum value
+reachable for that account at that moment, and
+`frecuencia_categoria_expandida` also recomputes exactly (counting real
+prior occurrences of the chosen category across the entire global history
+before that row). `amt`, `hora`, `conteo_ventana_global`, and
+`monto_ewma_cuenta` stay the same — the attacker only controls the
+category, not the amount or timing (a more aggressive attacker could also
+disguise the amount; not tested in this pass). **Documented limitation:**
+the change isn't propagated forward (later transactions on the same
+account that would see this disguised category within their own window) —
+a second-order effect, ignored as out of scope.
 
-**Resultado real, sobre el modelo de producción (6 features) y el mismo
-split de TEST (234,189 filas, 200 fraudes reales):**
+**Real result, on the production model (6 features) and the same TEST
+split (234,189 rows, 200 real frauds):**
 
-| | Sin camuflaje | Con camuflaje |
+| | Without disguise | With disguise |
 |---|---|---|
-| Fraudes detectados | 164/200 | **59/200** |
+| Frauds detected | 164/200 | **59/200** |
 | Recall | 82.0% | **29.5%** |
-| Score promedio | 0.816 | 0.322 |
-| `huella_categoria_cuenta` promedio | 0.091 | 0.738 |
-| `frecuencia_categoria_expandida` promedio | 0.0844 | 0.0579 |
+| Average score | 0.816 | 0.322 |
+| Average `huella_categoria_cuenta` | 0.091 | 0.738 |
+| Average `frecuencia_categoria_expandida` | 0.0844 | 0.0579 |
 
-**Caída de recall: 52.5 puntos porcentuales — 105 de 200 fraudes dejan de
-detectarse** con el ataque más simple y barato posible (una sola decisión:
-qué categoría usar). `huella_categoria_cuenta` pasa de un promedio de 0.09
-(claramente anómalo) a 0.74 (parece comportamiento normal) — el mecanismo
-de evasión funciona exactamente como se esperaría. Notablemente,
-`frecuencia_categoria_expandida` (la feature global) **casi no se mueve**
-(0.084→0.058) — confirma lo que ya mostró el ablation de la sección 17: es
-mucho más difícil de manipular eligiendo una sola categoría, porque depende
-de la población completa, no del historial de una cuenta.
+**Recall drop: 52.5 percentage points — 105 of 200 frauds go undetected**
+with the simplest, cheapest possible attack (one single decision: which
+category to use). `huella_categoria_cuenta` goes from an average of 0.09
+(clearly anomalous) to 0.74 (looks like normal behavior) — the evasion
+mechanism works exactly as expected. Notably,
+`frecuencia_categoria_expandida` (the global feature) **barely moves**
+(0.084→0.058) — confirming what section 17's ablation already showed: it's
+much harder to manipulate by picking a single category, because it
+depends on the full population, not on one account's history.
 
-**Conclusión honesta, no es un bug a corregir sino una limitación de diseño
-a comunicar:** cualquier sistema que personaliza detección aprendiendo "qué
-es normal para esta cuenta" es, por naturaleza, evadible por un adversario
-que conoce ese patrón normal y lo imita a propósito — no es un defecto
-único de SYNAPSE, es una tensión inherente al enfoque de personalización
-por comportamiento (el mismo problema que tienen los sistemas de
-recomendación y detección de bots basados en perfil). La ventaja real de
-`huella_categoria_cuenta` es contra fraude "ingenuo" (la mayoría del fraude
-real, que no está optimizado específicamente contra este mecanismo) — no
-es una promesa de robustez contra un atacante sofisticado y informado. Si
-se usa en un contexto donde el adversario podría llegar a conocer el
-mecanismo (ej. un empleado interno, o tras una filtración de cómo funciona
-el modelo), esta limitación debe comunicarse explícitamente, no asumirse
-como resuelta. Mitigación posible para el futuro, no implementada:
-una feature que mida "qué tan perfecta/típica es la elección de categoría"
-en sí misma (una elección *demasiado* óptima podría ser, paradójicamente,
-una señal secundaria de manipulación) — idea, no una solución probada.
+**Honest conclusion, not a bug to fix but a design limitation to
+communicate:** any system that personalizes detection by learning "what's
+normal for this account" is, by nature, evadable by an adversary who knows
+that normal pattern and deliberately imitates it — not a defect unique to
+SYNAPSE, but a tension inherent to behavior-based personalization (the
+same problem recommendation systems and profile-based bot detection have).
+`huella_categoria_cuenta`'s real advantage is against "naive" fraud (most
+real fraud, which isn't specifically optimized against this mechanism) —
+not a promise of robustness against a sophisticated, informed attacker. If
+used in a context where the adversary could plausibly learn the mechanism
+(e.g. an insider, or after a leak of how the model works), this limitation
+needs to be communicated explicitly, not assumed away. A possible future
+mitigation, not implemented: a feature measuring "how perfect/typical the
+category choice is" itself (a choice that's *too* optimal could,
+paradoxically, be a secondary signal of manipulation) — an idea, not a
+proven solution.
 
-## 21. Búsqueda de hiperparámetros rehecha con las 6 features (2026-09-14)
+## 21. Hyperparameter search redone with the 6 features (2026-09-14)
 
-Cierra la última de las 5 pruebas de esta ronda. El "Paso 4" original del
-afinamiento (grid de 12 combinaciones, `max_depth` ∈ {3,5,8},
-`learning_rate` ∈ {0.05,0.1}, `max_iter` ∈ {200,300}, sobre 3 folds) se
-había corrido con las 5 features de entonces, antes de agregar
-`frecuencia_categoria_expandida` (sección 16). Se repitió con las 6
-features actuales de producción.
+Closes the last of this round's 5 tests. The tuning's original "Step 4"
+(a 12-combination grid, `max_depth` ∈ {3,5,8}, `learning_rate` ∈
+{0.05,0.1}, `max_iter` ∈ {200,300}, over 3 folds) had been run with the 5
+features that existed back then, before adding
+`frecuencia_categoria_expandida` (section 16). It was repeated with the
+current 6 production features.
 
-**Nota de método:** el primer intento reventó por falta de memoria real —
-la máquina tiene solo 5.9GB de RAM total, y `calibrar()` construye también
-la tabla de búsqueda completa (innecesaria para solo comparar AUC-PR;
-con `max_depth` alto puede crecer a decenas de millones de combinaciones).
-Se rehizo entrenando y midiendo AUC-PR directamente, sin construir la
-tabla, con limpieza explícita de memoria entre combinaciones.
+**Method note:** the first attempt crashed from real memory pressure — the
+machine has only 5.9GB of total RAM, and `calibrar()` also builds the full
+lookup table (unnecessary just to compare AUC-PR; with a high `max_depth`
+it can grow to tens of millions of combinations). It was redone by training
+and measuring AUC-PR directly, without building the table, with explicit
+memory cleanup between combinations.
 
-**Grid de 12 combinaciones (3-fold, igual metodología que el Paso 4 original):**
+**12-combination grid (3-fold, same methodology as the original Step 4):**
 
-| Configuración | AUC-PR (3-fold) |
+| Configuration | AUC-PR (3-fold) |
 |---|---|
 | **`max_depth=3, lr=0.1, max_iter=200`** | **0.9479 ± 0.0223** |
 | `max_depth=3, lr=0.05, max_iter=300` | 0.9459 ± 0.0263 |
 | `max_depth=3, lr=0.1, max_iter=300` | 0.9464 ± 0.0207 |
-| `max_depth=3, lr=0.05, max_iter=200` (config actual de producción) | 0.9430 ± 0.0234 |
-| `max_depth=5` (las 4 combinaciones) | 0.9169 – 0.9204 |
-| `max_depth=8` (las 4 combinaciones) | 0.8491 – 0.8768, mucho más inestable |
+| `max_depth=3, lr=0.05, max_iter=200` (current production config) | 0.9430 ± 0.0234 |
+| `max_depth=5` (all 4 combinations) | 0.9169 – 0.9204 |
+| `max_depth=8` (all 4 combinations) | 0.8491 – 0.8768, much more unstable |
 
-`max_depth=8` confirma el mismo patrón que ya se vio con 5 features
-(Paso 4 original): sobreajusta y es inestable con solo 99 cuentas
-(desviación hasta ±0.085). `max_depth=3` sigue siendo, por lejos, la
-mejor familia.
+`max_depth=8` confirms the same pattern already seen with 5 features (the
+original Step 4): it overfits and is unstable with only 99 accounts
+(std dev up to ±0.085). `max_depth=3` remains, by a wide margin, the best
+family.
 
-**Validación del candidato ganador (`max_depth=3, lr=0.1, max_iter=200`)
-con el 5-fold completo** (`frac_train_inicial=0.5`, mismo estándar de las
-secciones 14-20):
+**Validating the winning candidate (`max_depth=3, lr=0.1, max_iter=200`)
+with the full 5-fold** (`frac_train_inicial=0.5`, same standard as
+sections 14-20):
 
-| | AUC-PR por fold | Media | Desviación |
+| | AUC-PR per fold | Mean | Std dev |
 |---|---|---|---|
-| Config actual (`lr=0.05`) | 0.907, 0.923, 0.976, 0.958, 0.970 | 0.947 | ±0.027 |
-| **Candidato (`lr=0.1`)** | 0.914, 0.957, 0.976, 0.955, 0.983 | **0.957** | ±0.024 |
+| Current config (`lr=0.05`) | 0.907, 0.923, 0.976, 0.958, 0.970 | 0.947 | ±0.027 |
+| **Candidate (`lr=0.1`)** | 0.914, 0.957, 0.976, 0.955, 0.983 | **0.957** | ±0.024 |
 
-**Mejora real de +0.0098**, mejor o prácticamente empatado en 4 de 5
-folds (nunca claramente peor), con desviación levemente menor. No es una
-mejora dramática como la de `frecuencia_categoria_expandida` (+0.033,
-sección 16), pero es consistente y no parece ruido.
+**A real improvement of +0.0098**, better or practically tied in 4 of 5
+folds (never clearly worse), with a slightly lower std dev. Not a dramatic
+improvement like `frecuencia_categoria_expandida`'s (+0.033, section 16),
+but consistent and doesn't look like noise.
 
-**Recomendación:** vale la pena cambiar `LEARNING_RATE` de `0.05` a `0.1`
-en `src/calibrador_arboles.py` — implica reentrenar, reconstruir la tabla
-de búsqueda (con el nuevo modelo, los umbrales reales de los árboles
-cambian) y revalidar exactitud bit a bit, igual disciplina que cualquier
-cambio de producción de este proyecto.
+**Recommendation:** worth changing `LEARNING_RATE` from `0.05` to `0.1` in
+`src/calibrador_arboles.py` — this means retraining, rebuilding the lookup
+table (with the new model, the trees' real thresholds change), and
+re-validating bit-for-bit accuracy, the same discipline as any production
+change in this project.
 
-**Implementado el mismo día**, ver la actualización al final de la
-sección 16 (cifras reales con `learning_rate=0.1`, tabla reconstruida y
-reverificada bit a bit, 186 tests en verde).
+**Implemented the same day**, see the update at the end of section 16
+(real figures with `learning_rate=0.1`, table rebuilt and re-verified bit
+for bit, 186 tests green).
 
-## Cierre de la ronda de 5 pruebas adicionales (2026-09-14)
+## Close-out of the additional 5-test round (2026-09-14)
 
-Resumen de las 5 pruebas que el usuario pidió correr de a una, después de
-cerrar la integración de `frecuencia_categoria_expandida` (sección 16):
+Summary of the 5 tests the user asked to run one at a time, after closing
+`frecuencia_categoria_expandida`'s integration (section 16):
 
-1. **Ablation de redundancia** (sección 17): sin redundancia, las 6
-   features actuales se quedan tal como están.
-2. **Features demográficas de Sparkov** (sección 18): cerrado por falta
-   de datos (nunca se guardaron al combinar los 61 archivos crudos), no
-   un resultado negativo del modelo.
-3. **Detector de deriva con la feature nueva** (sección 19): funciona
-   técnicamente bien, pero es ruidoso con `frecuencia_categoria_expandida`
-   (dispara recalibración 85% de las veces vs. 23% sin ella) —
-   recomendación de excluirla del monitoreo, no implementada. De paso,
-   encontró que Dominio 2 no tiene disparador de recalibración propio
-   todavía (solo existe el de Dominio 1).
-4. **Prueba adversarial** (sección 20): un ataque barato (imitar la
-   categoría típica de la cuenta) tumba el recall de 82.0% a 29.5% —
-   limitación de diseño inherente a la personalización por comportamiento,
-   documentada, no "corregida".
-5. **Búsqueda de hiperparámetros con 6 features** (esta sección): mejora
-   real (+0.0098 AUC-PR en 5-fold, y confirmada también en el split único:
-   AUC-PR VAL 0.898→0.951, TEST 0.901→0.926) cambiando `learning_rate` de
-   0.05 a 0.1 — **implementado el mismo día**, ver actualización al final
-   de la sección 16.
+1. **Redundancy ablation** (section 17): no redundancy, the current 6
+   features stay as they are.
+2. **Sparkov demographic features** (section 18): closed for lack of data
+   (never saved when the 61 raw files were combined), not a negative
+   model result.
+3. **Drift detector with the new feature** (section 19): technically
+   works fine, but is noisy with `frecuencia_categoria_expandida`
+   (triggers recalibration 85% of the time vs. 23% without it) —
+   recommendation to exclude it from monitoring, not implemented. Along
+   the way, found that Domain 2 doesn't have its own recalibration
+   trigger yet (only Domain 1's exists).
+4. **Adversarial test** (section 20): a cheap attack (imitating the
+   account's typical category) drops recall from 82.0% to 29.5% —
+   a design limitation inherent to behavior-based personalization,
+   documented, not "fixed."
+5. **Hyperparameter search with 6 features** (this section): a real
+   improvement (+0.0098 AUC-PR in 5-fold, also confirmed in the single
+   split: AUC-PR VAL 0.898→0.951, TEST 0.901→0.926) by changing
+   `learning_rate` from 0.05 to 0.1 — **implemented the same day**, see
+   the update at the end of section 16.
 
-**Estado general de Dominio 2 después de esta ronda:** el modelo en
-producción cambió una vez respecto a lo que cerró la sección 16 —
-`learning_rate=0.1` en vez de `0.05` (hallazgo #5, implementado y
-reverificado bit a bit). Las otras 4 pruebas fueron diagnóstico puro, sin
-tocar `src/`. Las dos recomendaciones que quedaban abiertas ya se
-cerraron (ver abajo): #3 (excluir `frecuencia_categoria_expandida` del
-monitoreo de deriva) implementada vía `FEATURES_MONITOREO_DERIVA`; #4
-(mitigación adversarial) probada y descartada, ver sección 22.
+**Domain 2's general status after this round:** the production model
+changed once relative to what section 16 closed with — `learning_rate=0.1`
+instead of `0.05` (finding #5, implemented and re-verified bit for bit).
+The other 4 tests were pure diagnostics, without touching `src/`. The two
+recommendations that remained open are now closed (see below): #3
+(exclude `frecuencia_categoria_expandida` from drift monitoring)
+implemented via `FEATURES_MONITOREO_DERIVA`; #4 (adversarial mitigation)
+tried and dropped, see section 22.
 
-## 22. Mitigación adversarial probada y descartada (2026-09-14)
+## 22. Adversarial mitigation tried and dropped (2026-09-14)
 
-Cierra la recomendación especulativa de la sección 20 ("una feature que
-mida qué tan perfecta/típica es la elección de categoría"). Diseño
-concreto probado: `brecha_categoria = huella_categoria_cuenta -
-frecuencia_categoria_expandida` como 7ma feature — bajo el ataque de la
-sección 20, `huella` salta a ~0.74 pero `frecuencia_expandida` casi no se
-mueve (~0.06), brecha ~0.68 vs. ~0.007 en fraude normal sin camuflar.
+Closes section 20's speculative recommendation ("a feature measuring how
+perfect/typical the category choice is"). Concrete design tested:
+`brecha_categoria = huella_categoria_cuenta -
+frecuencia_categoria_expandida` as a 7th feature — under section 20's
+attack, `huella` jumps to ~0.74 but `frecuencia_expandida` barely moves
+(~0.06), a gap of ~0.68 vs. ~0.007 in normal, non-disguised fraud.
 
-**Resultado real (walk-forward 5-fold para AUC-PR general, split único
-para el ataque, misma metodología de la sección 20):**
+**Real result (walk-forward 5-fold for overall AUC-PR, single split for
+the attack, same methodology as section 20):**
 
-| | 6 features (producción) | 7 features (+ `brecha_categoria`) |
+| | 6 features (production) | 7 features (+ `brecha_categoria`) |
 |---|---|---|
-| AUC-PR general (5-fold) | 0.9568 ± 0.0240 | **0.9479 ± 0.0322** |
-| Recall sin camuflaje | 82.0% (164/200) | 83.0% (166/200) |
-| Recall con camuflaje | 29.5% (59/200) | **33.5% (67/200)** |
+| Overall AUC-PR (5-fold) | 0.9568 ± 0.0240 | **0.9479 ± 0.0322** |
+| Recall without disguise | 82.0% (164/200) | 83.0% (166/200) |
+| Recall with disguise | 29.5% (59/200) | **33.5% (67/200)** |
 
-**Veredicto honesto: no vale la pena.** Recupera solo 4 puntos de recall
-bajo ataque (29.5%→33.5%, lejos del 82-83% normal), a costa de empeorar
-el AUC-PR general (-0.0089) y aumentar la varianza entre folds (±0.024→
-±0.032). El costo en desempeño general supera el beneficio marginal
-contra este ataque específico — mismo patrón que otros intentos de
-mejora descartados en este proyecto (EWMA de la sección 15.2, suavizado
-de Camino 3): una idea razonable en teoría que no se sostiene con datos
-reales. **No implementado en `src/`.**
+**Honest verdict: not worth it.** It only recovers 4 points of recall
+under attack (29.5%→33.5%, far from the normal 82-83%), at the cost of
+worsening overall AUC-PR (-0.0089) and increasing variance across folds
+(±0.024→±0.032). The cost in overall performance outweighs the marginal
+benefit against this specific attack — the same pattern as other
+improvement attempts dropped in this project (section 15.2's EWMA, Path
+3's smoothing): a reasonable idea in theory that doesn't hold up with real
+data. **Not implemented in `src/`.**
 
-Con esto, las 5 recomendaciones que salieron de la ronda de pruebas
-quedan todas resueltas (3 implementadas, 2 probadas y descartadas
-honestamente). No queda ningún hallazgo pendiente de decisión en
-Dominio 2 al cierre de esta sesión.
+With this, all 5 recommendations from the test round are resolved (3
+implemented, 2 tried and honestly dropped). No finding remains pending a
+decision in Domain 2 as of this session's close.

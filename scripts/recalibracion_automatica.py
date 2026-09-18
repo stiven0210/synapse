@@ -1,13 +1,14 @@
-"""Job de recalibración automática — el disparador que `docs/PLAN_DE_TRABAJO.md`
-señalaba como faltante: conecta detección de deriva (`src/deriva.py`) con
-recalibración (`src/disparador_recalibracion.py`) y con la recarga en vivo
-del Ejecutor (`CicloDecision.recargar_artefacto()`), sobre datos reales.
+"""Automatic recalibration job — the trigger that `docs/PLAN_DE_TRABAJO.md`
+flagged as missing: connects drift detection (`src/deriva.py`) with
+recalibration (`src/disparador_recalibracion.py`) and with the Executor's
+live reload (`CicloDecision.recargar_artefacto()`), over real data.
 
-Simula el escenario de producción: un `CicloDecision` ya corriendo con el
-artefacto calibrado en train/val (igual que `scripts/validacion_end_to_end.py`),
-y este job evaluando si la ventana de test (la "más reciente" disponible)
-justifica recalibrar — y si es así, recargando el artefacto nuevo en el
-ciclo vivo sin perder el estado recursivo acumulado.
+Simulates the production scenario: a `CicloDecision` already running with
+the artifact calibrated on train/val (same as
+`scripts/validacion_end_to_end.py`), and this job evaluating whether the
+test window (the "most recent" one available) justifies recalibrating —
+and if so, reloading the new artifact into the live cycle without losing
+the accumulated recursive state.
 """
 import json
 from pathlib import Path
@@ -26,16 +27,17 @@ def main() -> None:
     df = cargar_dataset(RUTA_DATASET)
     train, val, test = split_temporal(df)
 
-    # Estado inicial de producción: el artefacto calibrado con train/val (igual que Fase 5).
+    # Initial production state: the artifact calibrated on train/val (same as Phase 5).
     artefacto_inicial = calibrar(train, val)
     publicar(artefacto_inicial, RUTA_ARTEFACTO)
     ciclo = CicloDecision(ruta_artefacto=RUTA_ARTEFACTO)
     print(f"Artefacto inicial publicado: version {artefacto_inicial['version']}, "
           f"calibrado {artefacto_inicial['fecha_calibracion']}")
 
-    # El job periódico: compara la referencia de calibración (train) contra
-    # la ventana más reciente de producción (test) -- mismo par que usa
-    # scripts/deteccion_deriva.py para el reporte, pero aquí sí actúa si hace falta.
+    # The periodic job: compares the calibration reference (train) against
+    # the most recent production window (test) -- same pair
+    # scripts/deteccion_deriva.py uses for its report, but here it actually
+    # acts if needed.
     resultado = evaluar_y_recalibrar_si_hace_falta(
         df_referencia=train, df_actual=test, columnas_deriva=FEATURES, ruta_artefacto=RUTA_ARTEFACTO,
     )
