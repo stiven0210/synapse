@@ -1,4 +1,4 @@
-"""Contrato del artefacto de política (`docs/ADR_001_artefacto_de_politica.md`)
+"""Contrato del artefacto de política (`docs/adr/0001-policy-artifact.md`)
 — vive en un módulo neutral, no en `ejecutor.py` ni en `puente.py`. Corrige
 un hallazgo de la auditoría: `puente.py` importaba la validación desde
 `ejecutor.py`, invirtiendo la dirección natural de dependencia (el

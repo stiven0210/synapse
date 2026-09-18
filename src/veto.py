@@ -1,5 +1,5 @@
 """Veto — Fase 4. Invariantes duros e independientes del modelo
-(`docs/ADR_002_capa_de_veto.md`). Se evalúan DESPUÉS del Ejecutor y pueden
+(`docs/adr/0002-veto-layer.md`). Se evalúan DESPUÉS del Ejecutor y pueden
 sobreescribir su decisión — nunca al revés. Protege incluso si el
 Calibrador o el Ejecutor están mal calibrados.
 """

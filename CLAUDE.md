@@ -36,7 +36,7 @@ Dominio 1 es público, sin credenciales. Única excepción: `src/agente_triage.p
 (triage de escalamientos de Veto) usa `anthropic` + `ANTHROPIC_API_KEY` en
 el entorno — nunca hardcoded, y solo en el cliente real
 (`crear_cliente_claude()`); toda la lógica de auditoría se testea con un
-cliente inyectable, sin llamada real (ver `docs/ADR_003_agente_triage_veto.md`).
+cliente inyectable, sin llamada real (ver `docs/adr/0003-triage-agent.md`).
 
 ## Principios (agentes LLM)
 - **Ningún LLM en el camino caliente.** `agente_triage.py` nunca se invoca
@@ -44,7 +44,7 @@ cliente inyectable, sin llamada real (ver `docs/ADR_003_agente_triage_veto.md`).
   escritas en `bitacora_decisiones.py`.
 - **Ningún LLM decide ni bloquea nada.** Su output es una hipótesis para
   que un humano la verifique, nunca cambia estado del sistema.
-- **Misma disciplina de 3 capas que el agente de `an earlier project`**
+- **Misma disciplina de 3 capas usada en un proyecto anterior propio**
   (schema determinista, grounding determinista, auditor selectivo —
   desacuerdo nunca se resuelve por mayoría), replicada como código nuevo:
   SYNAPSE no comparte código con otros proyectos.

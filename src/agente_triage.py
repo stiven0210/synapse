@@ -1,8 +1,8 @@
 """Agente de triage sobre escalamientos operativos de Veto —
-`docs/ADR_003_agente_triage_veto.md`. Implementa la misma disciplina de 3
-capas que el agente de an earlier project (`an ADR from an earlier project`
-de ese proyecto), replicada aquí como código nuevo e independiente — SYNAPSE
-no comparte código con otros proyectos (`CLAUDE.md`).
+`docs/adr/0003-triage-agent.md`. Implementa la misma disciplina de 3
+capas usada en un agente similar de un proyecto anterior propio, replicada
+aquí como código nuevo e independiente — SYNAPSE no comparte código con
+otros proyectos (`CLAUDE.md`).
 
 **Nunca participa en el camino caliente**: no se invoca desde
 `CicloDecision.decidir()`. Se corre después, sobre entradas ya escritas en
@@ -26,7 +26,7 @@ from typing import Callable
 SEVERIDADES_VALIDAS = {"baja", "media", "alta"}
 ACCIONES_VALIDAS = {"investigar_pipeline_datos", "verificar_artefacto", "verificar_esquema_transaccion", "sin_accion_clara"}
 
-TASA_MUESTREO_AUDITOR_DEFECTO = 0.2  # Capa 3: 1 de cada 5, no el 100% (mismo principio que ADR_001 de an earlier project)
+TASA_MUESTREO_AUDITOR_DEFECTO = 0.2  # Capa 3: 1 de cada 5, no el 100% (mismo principio usado en un proyecto anterior propio)
 VENTANA_CIRCUITO_DEFECTO = 20
 UMBRAL_TASA_DESCARTE_DEFECTO = 0.5
 
@@ -168,13 +168,13 @@ def _capa2_grounding(resultado: ResultadoLLM, entrada: dict, contexto: dict) -> 
     """Chequeo determinista y barato sobre el 100% de las salidas válidas:
     ¿las afirmaciones de `evidencia_citada` comparten vocabulario real con
     los datos que de verdad se le dieron al agente? No es NLP sofisticado a
-    propósito (mismo principio que la Capa 2 de an earlier project) -- detecta el caso
+    propósito (mismo principio usado en un proyecto anterior propio) -- detecta el caso
     obvio de alucinación total desconectada de los datos; la evaluación
     semántica real es trabajo de la Capa 3, y esa sí es selectiva.
 
-    Umbral de longitud de palabra en 3 (no 4 como en an earlier project): acá el
-    vocabulario verificable son tokens técnicos cortos (nombres de feature
-    como "V14", "NaN"), no prosa en inglés.
+    Umbral de longitud de palabra en 3 (más bajo que en ese proyecto
+    anterior): acá el vocabulario verificable son tokens técnicos cortos
+    (nombres de feature como "V14", "NaN"), no prosa en inglés.
 
     **Corrección de un hallazgo real de auditoría**: `evidencia_citada`
     vacía devolvía `True` ("nada que groundear") -- pero Capa 1 solo exige

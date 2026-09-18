@@ -1,6 +1,6 @@
 """Calibrador (capa lenta) — Fase 1. Entrena un clasificador sobre
 transacciones históricas y produce el artefacto de política de
-`docs/ADR_001_artefacto_de_politica.md` (validado en `src/artefacto.py`,
+`docs/adr/0001-policy-artifact.md` (validado en `src/artefacto.py`,
 compartido con `ejecutor.py` y `puente.py`). Nunca decide en tiempo real —
 eso es responsabilidad exclusiva del Ejecutor (`ejecutor.py`).
 

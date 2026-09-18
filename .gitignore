@@ -24,3 +24,13 @@ data/*.jsonl
 .idea/
 .DS_Store
 Thumbs.db
+
+# Documentos personales/legales -- nunca deben versionarse ni publicarse
+# (este repo es publico o esta por serlo)
+docs/*.pdf
+docs/Contrato*
+docs/*contrato*
+docs/*CONTRATO*
+
+# Local drafts, not for the repo
+docs/ARTICULO_HALLAZGO_ADVERSARIAL.md

@@ -1,146 +1,174 @@
 # SYNAPSE
 
-Framework de decisión de dos velocidades: una capa lenta (**Calibrador**)
-que aprende sin límite de tiempo, y una capa rápida (**Ejecutor**) que
-decide en microsegundos aplicando lo ya aprendido — sin volver a pensar.
+## Two-Speed Decision Framework for Real-Time AI Governance
 
-**No es una idea nueva** (el patrón existe en control theory desde Kalman,
-1960, y toda la industria de detección de fraude ya lo usa — Feedzai,
-Featurespace, feature stores como Tecton/Feast). El objetivo aquí es una
-implementación simple, abierta y bien entendida del mismo patrón, no
-inventar algo sin precedentes.
+### The Problem
 
-## Para quién es esto
+LLM-based agents reason well but decide slowly — seconds per call, sometimes
+more. Production systems that gate real transactions (fraud, industrial
+control, multi-agent tool calls) need a decision on every event, often at
+sub-millisecond latency. Calling a model in that hot path either blows the
+latency budget or forces you to skip the check.
 
-No es un tutorial de introducción (asume que ya sabes por qué importa el
-train/serve skew) ni está pensado para equipos que ya operan una
-plataforma empresarial para esto (Feedzai, Featurespace, un feature store
-tipo Tecton/Feast) — esos ya tienen el problema resuelto. El encaje real es
-un ingeniero solo o un equipo chico construyendo esto con un asistente de
-codificación con IA, en una escala o presupuesto donde comprar esa
-plataforma no se justifica. Ese encaje no es solo cuestión de tamaño de
-empresa: un equipo chico *dentro* de una organización grande y regulada
-(un equipo de innovación de un banco construyendo internamente en vez de
-comprar) encaja igual o mejor — una decisión de construir-vs-comprar bajo
-escrutinio de compliance necesita el historial de ADRs, la auditoría
-escrita, y la capa de Veto con fail-closed documentados aquí, no como
-overhead sino como lo que permite que la decisión sobreviva una revisión.
-La evidencia en la que se apoya este patrón (latencia medida en
-microsegundos, precisión/recall reales, una auditoría escrita de bugs
-encontrados *y* corregidos) está pensada para ese lector escéptico bajo
-escrutinio, no para un pitch de marketing.
+Most AI-adjacent systems also lack a hard backstop. When the model's
+confidence is wrong — a bad calibration, a distribution shift, a silent
+bug — nothing overrides it, and nothing outside the model's own scoring says
+"stop" with a guarantee that doesn't depend on the model being right.
 
-## Estado
+Multi-agent systems compound both problems: decisions cascade through
+several agents, and when the outcome is wrong there is no accountability
+chain — no versioned record of which policy produced which decision, and
+why.
 
-6 fases completas + auditoría post-implementación (12 hallazgos, 10
-corregidos) + detección de deriva (con ponderación por magnitud de
-coeficiente) + disparador de recalibración automática (deriva ->
-recalibración -> publicación -> recarga en vivo) + bitácora de decisiones +
-agente de triage de escalamientos de Veto (LLM en capa lenta, con
-grounding y auditor selectivo, nunca en el camino caliente) + validación
-cruzada walk-forward multi-fold + umbral de decisión por costo esperado
-(análisis, no reemplaza producción) + monitoreo de deriva del score de
-salida (complementa la deriva por feature) + runner diario (despliegue
-real sobre el dataset histórico, con estado persistente). Agente de triage
-validado con `ANTHROPIC_API_KEY` real (2 bugs de integración encontrados y
-corregidos) y con una auditoría adversarial independiente (5 hallazgos
-reales, los 5 corregidos). **132 tests, todos en verde.**
+### The Approach: Two-Speed Architecture
 
-## Las piezas
+SYNAPSE separates **learning** (slow, offline, no time pressure) from
+**deciding** (fast, online, microseconds). The two never share a time
+budget:
 
-1. **Calibrador** — analiza datos históricos, produce un artefacto de
-   política versionado (JSON: pesos, umbrales). Nunca decide en tiempo real.
-2. **Ejecutor** — mantiene un estado compacto actualizado de forma
-   recursiva (O(1) por evento, `collections.deque`), aplica el artefacto
-   vigente, decide en microsegundos. Nunca reentrena ni llama a red.
-   **No es la API pública** — de bajo nivel a propósito, ver `CicloDecision`.
-3. **Puente** — actualiza el artefacto de forma atómica (archivo temporal +
-   reemplazo atómico), para que el Ejecutor nunca lea un artefacto a medio
-   escribir.
-4. **Veto** — invariantes duros independientes del modelo. Protege incluso
-   si el Calibrador o el Ejecutor están mal calibrados.
-5. **`CicloDecision`** (`src/ciclo.py`) — **único punto de entrada real**:
-   fuerza que el artefacto pase siempre por el Puente, que el Veto siempre
-   corra, y convierte cualquier fallo (artefacto ausente/corrupto, error
-   del Ejecutor) en una decisión real de "escalar a revisión manual" en vez
-   de propagar una excepción sin capturar. También expone
-   `recargar_artefacto()` — el mecanismo para actualizar el modelo en vivo
-   (nueva calibración por deriva detectada, nueva política, nuevo
-   hallazgo), conservando el estado recursivo acumulado y sin reemplazar
-   nada si la recarga falla (degradación con gracia).
-6. **Deriva** (`src/deriva.py`) — PSI + Kolmogorov-Smirnov, responde
-   *cuándo* hace falta llamar a `recargar_artefacto()`.
+```
+  historical data
+        │
+        ▼
+ ┌────────────────────┐
+ │     CALIBRATOR      │   slow layer — learns offline,
+ │  (offline, no time  │   no time constraint
+ │      limit)          │
+ └──────────┬──────────┘
+            │ produces
+            ▼
+ ┌────────────────────┐
+ │   POLICY ARTIFACT    │   versioned JSON contract
+ │   (versioned JSON)    │   (weights, thresholds, version N)
+ └──────────┬──────────┘
+            │ atomic swap (tmp file + replace —
+            │ Executor never reads a half-written artifact)
+            ▼
+ ┌────────────────────┐
+ │       BRIDGE          │
+ └──────────┬──────────┘
+            │
+ live event │
+      ──────┼───────────►┌────────────────────┐
+            │             │      EXECUTOR         │  fast layer —
+            │             │  (pure arithmetic,     │  microseconds,
+            │             │   µs-level latency)    │  no model inference,
+            │             └──────────┬───────────┘  no network, no retrain
+            │                        ▼
+            │             ┌────────────────────┐
+            │             │      VETO LAYER        │  hard invariants,
+            │             │  (model-independent,   │  always overrides —
+            │             │   always overrides)    │  correct even if the
+            │             └──────────┬───────────┘  model is miscalibrated
+            │                        ▼
+            │                  final decision
+            │                        │
+            │             ┌──────────▼───────────┐
+            │             │     DECISION LOG        │  full audit trail
+            │             └────────────────────────┘
+            │
+            └── observed by ──► DRIFT DETECTION (PSI + KS)
+                                 triggers recalibration back
+                                 into the Calibrator
+```
 
-Sin capa de interfaces genérica todavía — se construye concreto para el
-Dominio 1, se generaliza después de un segundo dominio real. Ver
-`docs/PLAN_DE_TRABAJO.md`.
+- **Calibrator** — learns from history, offline, no latency constraint.
+- **Policy Artifact** — the only channel between the two speeds: a
+  versioned JSON contract, never code.
+- **Bridge** — swaps the artifact atomically so the Executor never reads a
+  partial write.
+- **Executor** — pure arithmetic against the current artifact. No model
+  inference, no network call, no retraining, on the hot path.
+- **Veto Layer** — hard, model-independent invariants that override the
+  Executor's decision when they fire, regardless of model confidence.
+- **Drift Detection** — PSI + Kolmogorov-Smirnov on live features, decides
+  *when* the Calibrator needs to run again.
+- **Decision Log** — every decision, with the artifact version that
+  produced it, kept for audit.
 
-## Dominio 1: detección de fraude en transacciones
+### Validated Domains
 
-Dataset: Credit Card Fraud Detection (público, 284,807 transacciones, 492
-fraudes, sin credenciales de pago). Ver `docs/PLAN_DE_TRABAJO.md` para la
-limitación de datos conocida (sin identificador de tarjeta/cuenta) y cómo
-se maneja.
-
-**Resultados reales de validación** (`scripts/validacion_end_to_end.py`,
-sobre el tramo de prueba nunca antes visto):
-
-| | Precisión | Recall | F1 |
+| Domain | Dataset | Metric | Latency |
 |---|---|---|---|
-| SYNAPSE (dos capas) | 0.93 | 0.67 | 0.78 |
-| Baseline (umbral fijo, sin calibrar) | 0.00 | 0.00 | 0.00 |
+| Global fraud detection | ULB Credit Card Fraud (284,807 transactions, 492 frauds, public) | F1 0.78, AUC-ROC 0.978 (5-fold walk-forward avg, ±0.007) | 8.33 µs/decision |
+| Per-account fraud detection | Sparkov synthetic (1,170,945 transactions, 99 accounts) | F1 0.85, AUC-PR 0.90 (test) | 9.84 µs/decision |
+| Industrial anomaly detection (unsupervised) | SKAB (`valve1` subset, 16/35 files) | F1 0.76 — 3rd of 9 published leaderboard methods, 2 F1 points off the best (a neural net) | 13.05 µs/decision |
 
-Latencia real medida: **8.3 microsegundos/decisión** de punta a punta
-(Ejecutor + Veto) — el requisito real de la industria es p99 < 50
-*milisegundos*, así que esto está muy por debajo del cuello de botella real
-(no vale la pena optimizar más la velocidad; sí vale la pena seguir
-afinando corrección y robustez).
+Methodology notes, because the numbers are only useful if the comparison is
+honest:
+- The SKAB result uses the **unsupervised** detector (z-score/3-sigma,
+  no fraud labels seen in training) to stay comparable to SKAB's published
+  leaderboard, which only evaluates unsupervised methods on the full
+  35-file dataset. A separate supervised variant scores higher (F1 0.88)
+  but isn't leaderboard-comparable — trained on labels the published
+  benchmark doesn't allow.
+- Latency is measured end-to-end (`time.perf_counter()`, full
+  `Executor.decidir()` call, including per-event state maintenance), not
+  isolated arithmetic — the honest, reproducible number, not the best-case
+  one.
+- Each row is reproducible from this repo — see Quick Start.
 
-**Deriva real detectada** (`scripts/deteccion_deriva.py`): 8 de 31 features
-ya muestran deriva significativa entre train y test, pese a cubrir solo
-~48 horas — ver `docs/PLAN_DE_TRABAJO.md` para el detalle.
-
-## Estructura
-
-```
-synapse/
-├── CLAUDE.md
-├── docs/
-│   ├── PLAN_DE_TRABAJO.md          # empezar aquí -- estado, auditoría, resultados reales
-│   ├── ADR_001_artefacto_de_politica.md
-│   ├── ADR_002_capa_de_veto.md
-│   └── ADR_003_agente_triage_veto.md
-├── data/raw/creditcard.csv
-├── scripts/
-│   ├── validacion_end_to_end.py
-│   ├── deteccion_deriva.py
-│   ├── recalibracion_automatica.py   # disparador de recalibración, end-to-end
-│   ├── triage_veto.py                # bitácora -> agente de triage -> reporte para un humano
-│   └── runner_diario.py              # punto de entrada para Task Scheduler/cron -- un "día" real
-├── src/
-│   ├── artefacto.py       # contrato compartido (validación ADR_001) + calcular_scores() batch
-│   ├── calibrador.py
-│   ├── ejecutor.py
-│   ├── features_recursivas.py
-│   ├── puente.py
-│   ├── veto.py
-│   ├── ciclo.py           # CicloDecision -- único punto de entrada real
-│   ├── deriva.py          # PSI + Kolmogorov-Smirnov
-│   ├── disparador_recalibracion.py   # conecta deriva -> calibrador -> puente
-│   ├── bitacora_decisiones.py        # registro de decisiones, base para triar Veto
-│   ├── agente_triage.py              # LLM en capa lenta: hipótesis sobre escalamientos operativos
-│   ├── limitador_llamadas.py         # rate limiting diario del agente de triage
-│   ├── validacion_cruzada.py         # walk-forward multi-fold, diagnóstico de estabilidad
-│   ├── costo_decision.py             # umbral por costo esperado, análisis -- no reemplaza producción
-│   └── runner.py                     # bootstrap + estado persistente + deriva/triage por lote
-└── tests/
-```
-
-## Cómo correr
+### Quick Start
 
 ```bash
+git clone https://github.com/stiven0210/synapse.git
+cd synapse
 pip install -r requirements.txt
-pytest tests/ -q                              # 132 tests
-python scripts/validacion_end_to_end.py       # métricas + latencia reales
-python scripts/deteccion_deriva.py            # reporte de deriva real
+
+# Example dataset (ULB Credit Card Fraud — public, Kaggle):
+# https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud
+# place it at data/raw/creditcard.csv
+
+pytest tests/ -q                            # 187 tests
+python scripts/validacion_end_to_end.py     # real metrics + latency, Domain 1
+python scripts/deteccion_deriva.py          # real drift report
 ```
+
+### Architecture
+
+See [`docs/architecture.md`](docs/architecture.md) for the full C4-style
+breakdown — system context, containers, and each component's
+responsibilities and non-responsibilities — or explore the [interactive
+diagram](docs/architecture_diagram.html) directly.
+
+### Applications
+
+- Financial fraud detection (global and per-account)
+- Industrial anomaly monitoring
+- Multi-agent AI governance — a hard, auditable veto layer in front of
+  agent-driven actions
+- Any domain that needs a sub-millisecond, auditable decision in front of
+  a slower model
+
+### Why Two Speeds?
+
+Coupling learning and deciding forces a bad tradeoff: either the model runs
+on the hot path (and the latency budget breaks), or the hot path runs
+without the model's judgment (and there's no calibration at all). Splitting
+them lets each side be honest about its own constraints — the Calibrator
+can take as long as it needs and be as complex as it needs, because it
+never touches the request path; the Executor can be trivially fast and
+auditable, because it never does more than evaluate an already-calibrated
+artifact against hard invariants.
+
+The Veto Layer exists because a fast, well-calibrated Executor is still a
+model — it can be wrong. The invariants it enforces don't depend on the
+model being right; they're checked independently, every time.
+
+### Documentation
+
+- [Architecture (C4)](docs/architecture.md)
+- [Architecture Decision Records](docs/adr/README.md)
+- Domain research notes (detailed, Spanish): [Domain 2 — per-account
+  personalization](docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md),
+  [Domain 3 — industrial IoT
+  generalization](docs/CAMINO3_GENERALIZACION_IOT.md)
+
+### License
+
+[MIT](LICENSE)
+
+### Author
+
+Genes Stivens Benavides Angel — Solutions Architect.
+Personal research project. Not affiliated with any employer.

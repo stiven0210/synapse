@@ -14,9 +14,9 @@ completos -- ver `docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md`.
       anonimizadas), `Amount`, `Class`. Fuente: mirror de OpenML
       (`https://www.openml.org/data/get_csv/1673544/phpKo8OWT`), sin
       autenticación ni credenciales de pago.
-- [x] `docs/ADR_001_artefacto_de_politica.md` — forma exacta del JSON que
+- [x] `docs/adr/0001-policy-artifact.md` — forma exacta del JSON que
       conecta Calibrador y Ejecutor.
-- [x] `docs/ADR_002_capa_de_veto.md` — invariantes duros para esta
+- [x] `docs/adr/0002-veto-layer.md` — invariantes duros para esta
       iteración.
 
 **⚠️ Hallazgo importante de Fase 0 — limitación de datos:** el dataset
@@ -339,9 +339,9 @@ verificable con uso en producción, no offline).
 
 ### ✅ Agente de triage de escalamientos de Veto — completo
 
-`docs/ADR_003_agente_triage_veto.md` documenta la decisión completa.
-`src/agente_triage.py` implementa la misma disciplina de 3 capas del
-agente de an earlier project (código nuevo e independiente, no importado —
+`docs/adr/0003-triage-agent.md` documenta la decisión completa.
+`src/agente_triage.py` implementa la misma disciplina de 3 capas usada en
+un agente similar de un proyecto anterior propio (código nuevo e independiente, no importado —
 `CLAUDE.md`): Capa 1 (schema determinista), Capa 2 (grounding determinista
 contra los datos reales de la entrada/contexto), Capa 3 (auditor selectivo,
 desacuerdo nunca se resuelve por mayoría). Nunca se invoca desde
@@ -349,8 +349,8 @@ desacuerdo nunca se resuelve por mayoría). Nunca se invoca desde
 `SCORE_INVALIDO`/`ERROR_EJECUTOR` de la bitácora. Nunca decide ni bloquea
 nada, solo propone una hipótesis para que un humano la verifique.
 
-`src/limitador_llamadas.py` — rate limiting diario (mismo patrón que
-`an earlier project/src/agents/rate_limiter.py`, código independiente). `CircuitoTriage`
+`src/limitador_llamadas.py` — rate limiting diario (mismo patrón que un
+rate limiter de un proyecto anterior propio, código independiente). `CircuitoTriage`
 (en `agente_triage.py`) — circuit breaker: si la tasa de descarte de los
 últimos N triages supera el umbral, el agente se apaga solo antes de gastar
 en una llamada más (`CircuitoAbierto`), el llamador cae al reporte plano

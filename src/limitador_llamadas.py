@@ -1,5 +1,5 @@
 """Rate limiting y control de costos para llamadas a un LLM. Mismo patrón
-que `an earlier project/src/agents/rate_limiter.py`, replicado como código nuevo e
+usado en un proyecto anterior propio, replicado como código nuevo e
 independiente (SYNAPSE no comparte código con otros proyectos, `CLAUDE.md`).
 
 Envuelve cualquier cliente LLM (`Callable[[str], str]`) y cuenta llamadas
