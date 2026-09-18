@@ -1,5 +1,8 @@
 # SYNAPSE
 
+[![Tests](https://github.com/stiven0210/synapse/actions/workflows/test.yml/badge.svg)](https://github.com/stiven0210/synapse/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ## Two-Speed Decision Framework for Real-Time AI Governance
 
 ### The Problem
@@ -115,13 +118,16 @@ git clone https://github.com/stiven0210/synapse.git
 cd synapse
 pip install -r requirements.txt
 
+python -m scripts.demo                      # synthetic data, no dataset needed, ~5 seconds
+
+pytest tests/ -q                            # 187 tests
+
 # Example dataset (ULB Credit Card Fraud — public, Kaggle):
 # https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud
 # place it at data/raw/creditcard.csv
 
-pytest tests/ -q                            # 187 tests
-python scripts/validacion_end_to_end.py     # real metrics + latency, Domain 1
-python scripts/deteccion_deriva.py          # real drift report
+python -m scripts.validacion_end_to_end     # real metrics + latency, Domain 1
+python -m scripts.deteccion_deriva          # real drift report
 ```
 
 ### Architecture
