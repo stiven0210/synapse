@@ -116,7 +116,7 @@ comparison is honest):
   `Executor.decidir()` call including per-event state maintenance) — the
   honest, reproducible number, not isolated arithmetic.
 - Domain 1 is reproducible end-to-end with the Quick Start commands
-  above. Domain 2's code, tests, and methodology are in the repo — the
+  below. Domain 2's code, tests, and methodology are in the repo — the
   dataset is generated locally with Sparkov (see its research notes for
   exact parameters). Domain 3 is an exploratory validation — see its
   research notes for methodology and results.
