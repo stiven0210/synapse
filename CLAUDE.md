@@ -4,7 +4,7 @@
 Two-speed decision framework: a slow layer (Calibrator) that
 learns/calibrates with no time limit, and a fast layer (Executor) that
 decides in microseconds applying what's already been learned, without
-thinking again. See `docs/PLAN_DE_TRABAJO.md` for phase-by-phase status.
+thinking again.
 
 **Independent** project — shares no code with any earlier project.
 
@@ -19,19 +19,15 @@ thinking again. See `docs/PLAN_DE_TRABAJO.md` for phase-by-phase status.
   artifact.
 - The Veto Layer is model-independent — its invariants hold no matter
   what happens in the Calibrator/Executor.
-- No generic interface/contract layer yet: it's built concrete for
-  Domain 1 (fraud detection), and only generalized after a second real
-  domain (see the Phase 6 plan).
 - Always walk-forward / temporal split — never a random split on data
-  with real temporal order (same statistical-honesty principle used in
-  earlier projects).
+  with real temporal order.
 - Every formula/updater is tested against a known numeric case ahead of
   time, not just "runs without error."
 - Speed is measured, never assumed — every latency benchmark reports a
   real number (microseconds), not an estimate.
 
 ## Stack
-Python 3.14. `scikit-learn` for the Calibrator (Phase 1). Domain 1's
+Python 3.14. `scikit-learn` for the Calibrator. Domain 1's
 dataset is public, with no credentials. One exception: `src/agente_triage.py`
 (triage of Veto escalations) uses `anthropic` + `ANTHROPIC_API_KEY` in the
 environment — never hardcoded, and only in the real client
@@ -44,14 +40,19 @@ injectable client, with no real call (see `docs/adr/0003-triage-agent.md`).
   written to `bitacora_decisiones.py`.
 - **No LLM decides or blocks anything.** Its output is a hypothesis for a
   human to verify, it never changes system state.
-- **Same 3-layer discipline used in an earlier project of ours**
-  (deterministic schema, deterministic grounding, selective auditor —
-  disagreement is never resolved by majority vote), replicated here as
-  new code: SYNAPSE shares no code with other projects.
+- **Same 3-layer discipline** (deterministic schema, deterministic
+  grounding, selective auditor — disagreement is never resolved by
+  majority vote), implemented as independent code.
 
 ## Structure
 See `README.md` for the full tree.
 
-## Current phase
-Phase 0 — Foundations (dataset downloaded and validated, ADRs in
-progress). See `docs/PLAN_DE_TRABAJO.md` for detailed status.
+## Current state
+v1.0.0 tagged. 187 tests passing locally. 3 domains validated:
+- Domain 1: Global fraud detection (ULB Credit Card, F1 0.78, 8.33 µs)
+- Domain 2: Per-account fraud (Sparkov 1.17M rows, AUC-PR 0.90, 9.84 µs)
+- Domain 3: Industrial IoT anomalies (SKAB 34 files, F1 0.76 unsupervised,
+  3rd of 9 on official leaderboard, 13.05 µs)
+
+Repo prepared for public release with MIT license, English documentation,
+and ADRs translated.

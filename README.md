@@ -3,31 +3,29 @@
 [![Tests](https://github.com/stiven0210/synapse/actions/workflows/test.yml/badge.svg)](https://github.com/stiven0210/synapse/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Two-Speed Decision Framework for Real-Time AI Governance
+## Two-Speed Decision Framework for Real-Time Systems
 
 ### The Problem
 
-LLM-based agents reason well but decide slowly — seconds per call, sometimes
-more. Production systems that gate real transactions (fraud, industrial
-control, multi-agent tool calls) need a decision on every event, often at
-sub-millisecond latency. Calling a model in that hot path either blows the
-latency budget or forces you to skip the check.
+Production systems that need to act on every event — approving a
+transaction, flagging an anomaly, triggering an alert — face a hard
+tradeoff: the model that *should* make the decision is too slow for the
+latency budget, and the fast path that *can* meet the budget has no
+calibrated judgment behind it.
 
-Most AI-adjacent systems also lack a hard backstop. When the model's
-confidence is wrong — a bad calibration, a distribution shift, a silent
-bug — nothing overrides it, and nothing outside the model's own scoring says
-"stop" with a guarantee that doesn't depend on the model being right.
+Most real-time decision systems also lack a hard backstop. When the
+model's confidence is wrong — a bad calibration, a distribution shift, a
+silent bug — nothing overrides it, and nothing outside the model's own
+scoring says "stop" with a guarantee that doesn't depend on the model
+being right.
 
-Multi-agent systems compound both problems: decisions cascade through
-several agents, and when the outcome is wrong there is no accountability
-chain — no versioned record of which policy produced which decision, and
-why.
+SYNAPSE solves both problems by separating **learning** from **deciding**
+and adding a **model-independent veto layer** that always overrides.
 
 ### The Approach: Two-Speed Architecture
 
-SYNAPSE separates **learning** (slow, offline, no time pressure) from
-**deciding** (fast, online, microseconds). The two never share a time
-budget:
+The slow layer learns. The fast layer decides. They never share a time
+budget.
 
 ```
   historical data
@@ -76,40 +74,48 @@ budget:
 ```
 
 - **Calibrator** — learns from history, offline, no latency constraint.
+  Can use any algorithm (logistic regression, gradient boosting, neural
+  nets). Its only output is a Policy Artifact.
 - **Policy Artifact** — the only channel between the two speeds: a
-  versioned JSON contract, never code.
+  versioned JSON contract with features in contractual order,
+  coefficients, decision threshold, and validation metrics. Never code.
 - **Bridge** — swaps the artifact atomically so the Executor never reads a
   partial write.
-- **Executor** — pure arithmetic against the current artifact. No model
-  inference, no network call, no retraining, on the hot path.
+- **Executor** — pure arithmetic against the current artifact + compact
+  recursive state (EWMA, windowed counts). No model inference, no network
+  call, no retraining on the hot path.
 - **Veto Layer** — hard, model-independent invariants that override the
-  Executor's decision when they fire, regardless of model confidence.
-- **Drift Detection** — PSI + Kolmogorov-Smirnov on live features, decides
-  *when* the Calibrator needs to run again.
-- **Decision Log** — every decision, with the artifact version that
-  produced it, kept for audit.
+  Executor's decision when they fire. Corrupt artifact → veto. Extreme
+  value → veto. Invalid score (NaN, out of [0,1]) → veto. These hold
+  regardless of model quality.
+- **Drift Detection** — PSI (Population Stability Index) +
+  Kolmogorov-Smirnov on live features. Decides *when* the Calibrator
+  needs to run again — not on a schedule, but when the data says so.
+- **Decision Log** — every decision recorded with the artifact version
+  that produced it, the veto status, and the full input — kept for audit
+  and reproducibility.
 
 ### Validated Domains
 
-| Domain | Dataset | Metric | Latency |
+| Domain | Dataset | Key Metric | Latency |
 |---|---|---|---|
-| Global fraud detection | ULB Credit Card Fraud (284,807 transactions, 492 frauds, public) | F1 0.78, AUC-ROC 0.978 (5-fold walk-forward avg, ±0.007) | 8.33 µs/decision |
-| Per-account fraud detection | Sparkov synthetic (1,170,945 transactions, 99 accounts) | F1 0.85, AUC-PR 0.90 (test) | 9.84 µs/decision |
-| Industrial anomaly detection (unsupervised) | SKAB (`valve1` subset, 16/35 files) | F1 0.76 — 3rd of 9 published leaderboard methods, 2 F1 points off the best (a neural net) | 13.05 µs/decision |
+| Global fraud detection | ULB Credit Card Fraud (284,807 tx, public) | F1 0.78, AUC-ROC 0.978 | 8.33 µs/decision |
+| Per-account fraud detection | Sparkov synthetic (1.17M tx, 99 accounts) | F1 0.85, AUC-PR 0.90 (test) | 9.84 µs/decision |
+| Industrial anomaly detection | SKAB (34 anomaly files, official split, 8 sensors) | F1 0.76 — 3rd of 9 on official leaderboard | 13.05 µs/decision |
 
-Methodology notes, because the numbers are only useful if the comparison is
-honest:
-- The SKAB result uses the **unsupervised** detector (z-score/3-sigma,
-  no fraud labels seen in training) to stay comparable to SKAB's published
-  leaderboard, which only evaluates unsupervised methods on the full
-  35-file dataset. A separate supervised variant scores higher (F1 0.88)
-  but isn't leaderboard-comparable — trained on labels the published
-  benchmark doesn't allow.
+**Methodology notes** (because the numbers are only useful if the
+comparison is honest):
+
+- The SKAB result uses an **unsupervised** detector (z-score, 3σ
+  threshold, no anomaly labels seen in training) evaluated with the
+  **official SKAB methodology** (`core/metrics.py::chp_score`,
+  `metric="binary"`) on all 34 anomaly files — directly comparable to the
+  published leaderboard. A separate supervised variant scores higher
+  (F1 0.88) but isn't leaderboard-comparable.
 - Latency is measured end-to-end (`time.perf_counter()`, full
-  `Executor.decidir()` call, including per-event state maintenance), not
-  isolated arithmetic — the honest, reproducible number, not the best-case
-  one.
-- Each row is reproducible from this repo — see Quick Start.
+  `Executor.decidir()` call including per-event state maintenance) — the
+  honest, reproducible number, not isolated arithmetic.
+- Each domain is reproducible from this repo — see Quick Start below.
 
 ### Quick Start
 
@@ -122,7 +128,7 @@ python -m scripts.demo                      # synthetic data, no dataset needed,
 
 pytest tests/ -q                            # 187 tests
 
-# Example dataset (ULB Credit Card Fraud — public, Kaggle):
+# Full validation with a real dataset (ULB Credit Card Fraud — public, Kaggle):
 # https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud
 # place it at data/raw/creditcard.csv
 
@@ -133,42 +139,46 @@ python -m scripts.deteccion_deriva          # real drift report
 ### Architecture
 
 See [`docs/architecture.md`](docs/architecture.md) for the full C4-style
-breakdown — system context, containers, and each component's
-responsibilities and non-responsibilities — or explore the [interactive
-diagram](docs/architecture_diagram.html) directly.
+breakdown (system context, containers, component responsibilities and
+non-responsibilities) or explore the [interactive
+diagram](docs/architecture_diagram.html).
+
+### Design Principles
+
+- **Fail loud, never silent.** A decision the system can't make is
+  escalated or rejected — never defaulted to something that looks like a
+  real answer.
+- **Separation of learning from deciding.** The Calibrator and Executor
+  never share a time budget. Each is honest about its own constraints.
+- **Hard invariants over model confidence.** The Veto Layer doesn't trust
+  the model. It checks independently, every time.
+- **Versioned policy contracts.** The artifact is the only interface
+  between slow and fast. It's JSON, human-readable, and auditable.
+- **Full auditability.** Every decision is logged with the artifact
+  version, veto status, and inputs that produced it.
+- **Speed is measured, never assumed.** Latency numbers come from
+  `time.perf_counter()`, not estimates.
 
 ### Applications
 
-- Financial fraud detection (global and per-account)
-- Industrial anomaly monitoring
-- Multi-agent AI governance — a hard, auditable veto layer in front of
-  agent-driven actions
-- Any domain that needs a sub-millisecond, auditable decision in front of
-  a slower model
+**Validated:**
+- Financial fraud detection (global patterns and per-account behavior)
+- Industrial anomaly monitoring (IoT sensor data)
 
-### Why Two Speeds?
-
-Coupling learning and deciding forces a bad tradeoff: either the model runs
-on the hot path (and the latency budget breaks), or the hot path runs
-without the model's judgment (and there's no calibration at all). Splitting
-them lets each side be honest about its own constraints — the Calibrator
-can take as long as it needs and be as complex as it needs, because it
-never touches the request path; the Executor can be trivially fast and
-auditable, because it never does more than evaluate an already-calibrated
-artifact against hard invariants.
-
-The Veto Layer exists because a fast, well-calibrated Executor is still a
-model — it can be wrong. The invariants it enforces don't depend on the
-model being right; they're checked independently, every time.
+**Applicable (not yet validated):**
+- Telecommunications fraud (SIM swap, roaming fraud)
+- Cybersecurity intrusion detection
+- Real-time credit scoring
+- Any domain requiring sub-millisecond auditable decisions with hard
+  guardrails
 
 ### Documentation
 
 - [Architecture (C4)](docs/architecture.md)
 - [Architecture Decision Records](docs/adr/README.md)
-- Domain research notes (detailed, Spanish): [Domain 2 — per-account
-  personalization](docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md),
-  [Domain 3 — industrial IoT
-  generalization](docs/CAMINO3_GENERALIZACION_IOT.md)
+- Domain research notes (detailed, in Spanish):
+  [Domain 2 — per-account personalization](docs/DOMINIO2_PERSONALIZACION_POR_CUENTA.md),
+  [Domain 3 — industrial IoT generalization](docs/CAMINO3_GENERALIZACION_IOT.md)
 
 ### License
 
