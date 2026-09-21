@@ -191,4 +191,4 @@ diagram](docs/architecture_diagram.html).
 ### Author
 
 Genes Stivens Benavides Angel — Solutions Architect.
-Personal research project. Not affiliated with any employer.
+Personal research project.
