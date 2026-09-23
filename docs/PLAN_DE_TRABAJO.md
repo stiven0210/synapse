@@ -574,10 +574,14 @@ for the F1 threshold fix). Full suite: 106 tests.
 
 ## Pending from the broader test plan (not blocking)
 
-The IEEE-CIS dataset (account identifier, for testing per-entity
-personalization) remains blocked — it requires the user's own Kaggle
-account, joining the competition, and a real API token; there's no honest
-way to substitute that with an assumption.
+✅ **IEEE-CIS — unblocked 2026-09-13.** It required the user's own
+verified Kaggle account, joining the competition, and a real API token;
+all three were eventually done and the dataset was downloaded (gitignored,
+not redistributed). By then, per-entity personalization had already been
+covered with Sparkov (Domain 2), so IEEE-CIS was used for two other
+things: the prevalence comparison across continents (Domain 2 doc,
+section 12) and the cross-account network-signal test (section 10,
+a negative result).
 
 ### Finding from the concurrency investigation — documented, no code fix
 
