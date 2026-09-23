@@ -603,10 +603,10 @@ fraud volumes with a huge margin (the dataset averages ~1.6 tx/sec; even
 at 10 microseconds/decision, one thread covers >90,000 tx/sec). If real
 parallelism is ever needed, the correct approach is partitioning by
 account/entity (once that identifier exists, see the Phase 0 limitation),
-never sharing a single `Ejecutor` instance across threads. Pending: make
-this restriction explicit in `CLAUDE.md`/`ejecutor.py` (no production code
-was touched in this round, this was investigation and documentation of
-the finding only).
+never sharing a single `Ejecutor` instance across threads. ✅ This
+restriction is now explicit in the `src/ejecutor.py` module docstring
+("Not thread-safe, by design, not by oversight"); no locking or other
+code change was needed.
 
 ### ✅ Daily runner — the "real deployment, even if small" — complete
 
