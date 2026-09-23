@@ -130,7 +130,7 @@ pip install -r requirements.txt
 
 python -m scripts.demo                      # synthetic data, no dataset needed, ~5 seconds
 
-pytest tests/ -q                            # 187 tests
+pytest tests/ -q                            # 187 tests (2 skip without the local Sparkov dataset)
 
 # Full validation with a real dataset (ULB Credit Card Fraud — public, Kaggle):
 # https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud
