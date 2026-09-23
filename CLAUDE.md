@@ -19,6 +19,10 @@ thinking again.
   artifact.
 - The Veto Layer is model-independent — its invariants hold no matter
   what happens in the Calibrator/Executor.
+- An `Ejecutor`/`CicloDecision` instance is single-threaded by design: it
+  expects one sequential stream in time order and has no locking. Never
+  share an instance across threads; to parallelize, partition by
+  account/entity (see the `src/ejecutor.py` docstring).
 - Always walk-forward / temporal split — never a random split on data
   with real temporal order.
 - Every formula/updater is tested against a known numeric case ahead of
