@@ -25,8 +25,9 @@ there would be cosmetic wrapping around something already deterministic.
    layer).
 2. **It never decides or blocks anything.** Its output is a hypothesis for
    a human to verify — it never approves, rejects, or changes any state.
-3. **Same 3-layer discipline used in a previous project of ours**, replicated here as new, independent code — SYNAPSE shares no
-   code with other projects (`CLAUDE.md`):
+3. **Same 3-layer discipline used in a previous project of ours**,
+   replicated here as new, independent code — SYNAPSE shares no code with
+   other projects (`CLAUDE.md`):
    - Layer 1 (deterministic, 100% of responses): strict schema — well-formed
      JSON, required fields present, valid enums, confidence in [0,1]. Zero
      cost, no LLM.
