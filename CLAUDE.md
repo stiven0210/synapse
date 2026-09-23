@@ -52,11 +52,11 @@ injectable client, with no real call (see `docs/adr/0003-triage-agent.md`).
 See `README.md` for the full tree.
 
 ## Current state
-v1.0.0 tagged. 187 tests passing locally. 3 domains validated:
+v1.0.1 released. 187 tests passing (locally and in CI). 3 domains validated:
 - Domain 1: Global fraud detection (ULB Credit Card, F1 0.78, 8.33 µs)
 - Domain 2: Per-account fraud (Sparkov 1.17M rows, AUC-PR 0.90, 9.84 µs)
 - Domain 3: Industrial IoT anomalies (SKAB 34 files, F1 0.76 unsupervised,
   3rd of 9 on official leaderboard, 13.05 µs)
 
-Repo prepared for public release with MIT license, English documentation,
-and ADRs translated.
+Public repo (github.com/stiven0210/synapse) under the MIT license, with
+English documentation and ADRs.
